@@ -255,7 +255,7 @@ class NomaiCanvas {
         // Stop any existing transition
         this.pauseTransition();
 
-        const duration = 800; // ms
+        const duration = 5000; // ms
         const startProgress = this.transitionProgress.get(id) || 0;
         const remainingDuration = duration * (1 - startProgress);
         const startTime = performance.now();

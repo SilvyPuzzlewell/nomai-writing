@@ -237,7 +237,7 @@ class NomaiApp {
         const writerText = message.writer_name;
         const contentText = message.content;
         const totalChars = writerText.length + contentText.length;
-        const duration = 800;
+        const duration = 5000;
         const startTime = performance.now();
 
         // Store current message for tracking

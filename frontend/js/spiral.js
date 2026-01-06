@@ -24,7 +24,7 @@ function seededRandoms(seed, count) {
  */
 class SpiralGenerator {
     constructor(options = {}) {
-        this.baseLength = options.length || 80;
+        this.baseLength = options.length || 280;
         this.baseCurvature = options.curvature || 3.2;  // ~180 degrees of curl
         this.numPoints = options.numPoints || 50;
     }
@@ -37,9 +37,10 @@ class SpiralGenerator {
         const points = [];
 
         // Add randomness based on seed
-        const [rLen, rCurve] = seededRandoms(seed, 2);
+        const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
         const length = this.baseLength * scale * (0.85 + rLen * 0.3);
-        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3);
+        const curvatureSign = rDir > 0.5 ? 1 : -1; // Random curl direction
+        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign;
 
         // Integration step size
         const dt = 1 / this.numPoints;
@@ -243,12 +244,13 @@ class TreeLayoutEngine {
                 // The parent curls in direction of increasing theta
                 // Child should branch perpendicular, to the outside of the curl
                 const parentTangent = branchPoint.theta;
+                const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
 
                 // Branch outward: perpendicular to tangent, on the outside of the curl
-                // Since parent curls clockwise (positive curvature), outside is to the left
-                // That means perpendicular - PI/2
+                // Direction depends on parent's curl direction (sign of curvature)
                 const [rAngle] = seededRandoms(child.id + 1000, 1);
-                const angleOffset = -Math.PI / 2 + (rAngle - 0.5) * 0.4; // Outward with some variance
+                const outwardDir = parentCurvature > 0 ? -1 : 1; // Opposite to curl direction
+                const angleOffset = outwardDir * Math.PI / 2 + (rAngle - 0.5) * 0.6; // Outward with variance
                 const childAngle = parentTangent + angleOffset;
 
                 // Give each child a portion of the allocated angle for its subtree
