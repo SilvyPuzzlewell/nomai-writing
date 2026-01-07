@@ -1,4 +1,40 @@
 /**
+ * Check if two line segments intersect.
+ * Uses counter-clockwise orientation test.
+ */
+function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+    const ccw = (px, py, qx, qy, rx, ry) =>
+        (ry - py) * (qx - px) > (qy - py) * (rx - px);
+    return ccw(ax1, ay1, bx1, by1, bx2, by2) !== ccw(ax2, ay2, bx1, by1, bx2, by2) &&
+           ccw(ax1, ay1, ax2, ay2, bx1, by1) !== ccw(ax1, ay1, ax2, ay2, bx2, by2);
+}
+
+/**
+ * Check if a new spiral intersects with any existing spirals.
+ * Skips the first few segments near branch points.
+ */
+function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 5) {
+    for (const existing of existingSpirals) {
+        if (!existing.points) continue;
+        const existingPoints = existing.points;
+
+        for (let i = skipSegments; i < newPoints.length - 1; i++) {
+            for (let j = skipSegments; j < existingPoints.length - 1; j++) {
+                if (segmentsIntersect(
+                    newPoints[i].x, newPoints[i].y,
+                    newPoints[i + 1].x, newPoints[i + 1].y,
+                    existingPoints[j].x, existingPoints[j].y,
+                    existingPoints[j + 1].x, existingPoints[j + 1].y
+                )) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Seeded random number generator for deterministic randomness.
  * Uses message ID to ensure same spiral looks the same on re-render.
  */
@@ -32,15 +68,34 @@ class SpiralGenerator {
     /**
      * Generate points along a true coiling spiral.
      * Uses Archimedean spiral: position computed by integrating along the curve.
+     * @param {number} centerX - Start X position
+     * @param {number} centerY - Start Y position
+     * @param {number} startAngle - Initial direction angle
+     * @param {number} scale - Overall scale factor
+     * @param {number} seed - Seed for deterministic randomness
+     * @param {object} overrides - Optional parameter overrides for collision avoidance
+     * @param {number} overrides.curvatureSign - Force curl direction (1 or -1)
+     * @param {number} overrides.curvatureScale - Multiply curvature (0-1 for tighter)
+     * @param {number} overrides.lengthScale - Multiply length (0-1 for shorter)
+     * @param {number} overrides.angleOffset - Add to start angle
      */
-    generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0) {
+    generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0, overrides = {}) {
         const points = [];
 
         // Add randomness based on seed
         const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
-        const length = this.baseLength * scale * (0.85 + rLen * 0.3);
-        const curvatureSign = rDir > 0.5 ? 1 : -1; // Random curl direction
-        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign;
+
+        // Apply overrides for collision avoidance
+        const lengthScale = overrides.lengthScale ?? 1;
+        const curvatureScale = overrides.curvatureScale ?? 1;
+        const angleOffset = overrides.angleOffset ?? 0;
+
+        const length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
+        const curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
+        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
+
+        // Apply angle offset
+        const adjustedStartAngle = startAngle + angleOffset;
 
         // Integration step size
         const dt = 1 / this.numPoints;
@@ -51,7 +106,7 @@ class SpiralGenerator {
             const t = i / this.numPoints;
 
             // Current angle along the spiral
-            const theta = startAngle + curvature * t;
+            const theta = adjustedStartAngle + curvature * t;
 
             // Store point
             points.push({
@@ -119,6 +174,7 @@ class TreeLayoutEngine {
         this.centerY = canvasHeight / 2;
         this.spiralGenerator = new SpiralGenerator();
         this.occupiedPoints = [];
+        this.allSpirals = []; // Track all spirals for intersection detection
     }
 
     /**
@@ -127,8 +183,9 @@ class TreeLayoutEngine {
     layoutTree(messages) {
         if (!messages || messages.length === 0) return [];
 
-        // Reset occupied points for fresh layout
+        // Reset tracking for fresh layout
         this.occupiedPoints = [];
+        this.allSpirals = [];
 
         // Build message map and find roots
         const messageMap = new Map();
@@ -232,24 +289,82 @@ class TreeLayoutEngine {
     }
 
     /**
+     * Generate parameter variations for collision avoidance.
+     * Returns an array of override objects to try in order.
+     */
+    generateParameterVariations(seed) {
+        const variations = [];
+        const [rDir] = seededRandoms(seed, 1);
+        const preferredSign = rDir > 0.5 ? 1 : -1;
+
+        // Try different combinations: curvature direction, length, curvature tightness, angle offset
+        const curvatureSigns = [preferredSign, -preferredSign];
+        const lengthScales = [1.0, 0.75, 0.5];
+        const curvatureScales = [1.0, 0.7, 0.4];
+        const angleOffsets = [0, 0.4, -0.4, 0.8, -0.8];
+
+        // Generate variations in priority order
+        for (const lengthScale of lengthScales) {
+            for (const curvatureSign of curvatureSigns) {
+                for (const angleOffset of angleOffsets) {
+                    for (const curvatureScale of curvatureScales) {
+                        variations.push({
+                            curvatureSign,
+                            lengthScale,
+                            curvatureScale,
+                            angleOffset
+                        });
+                    }
+                }
+            }
+        }
+
+        return variations;
+    }
+
+    /**
      * Recursively layout a subtree within an allocated angle range.
      * parentSpiralData is used to determine branch point and outward direction.
+     * Uses intersection detection and retries with different parameters if needed.
      */
     layoutSubtree(node, startX, startY, startAngle, depth, allocatedAngle, parentSpiralData) {
         // Scale down spirals for deeper messages
         const scale = Math.max(0.4, 1 - (depth - 1) * 0.15);
 
-        // Generate spiral with seeded randomness based on message ID
-        const points = this.spiralGenerator.generateSpiralPoints(
-            startX, startY, startAngle, scale, node.id
-        );
+        // Generate parameter variations for collision avoidance
+        const variations = this.generateParameterVariations(node.id);
+
+        let points = null;
+        let usedOverrides = {};
+
+        // Try each variation until we find one that doesn't intersect
+        for (let attempt = 0; attempt < variations.length; attempt++) {
+            const overrides = variations[attempt];
+
+            points = this.spiralGenerator.generateSpiralPoints(
+                startX, startY, startAngle, scale, node.id, overrides
+            );
+
+            // Check for intersection with existing spirals
+            if (!checkSpiralIntersection(points, this.allSpirals)) {
+                usedOverrides = overrides;
+                break; // Found a non-intersecting configuration
+            }
+
+            // If this is the last attempt, use it anyway (best effort)
+            if (attempt === variations.length - 1) {
+                usedOverrides = overrides;
+            }
+        }
+
         const bezierPath = this.spiralGenerator.pointsToBezierPath(points);
 
         // Get endpoint
         const endPoint = points[points.length - 1];
 
         // Get the ending angle (direction the curve is facing at the end)
-        const endAngle = startAngle + (points.curvature || this.spiralGenerator.baseCurvature);
+        const endAngle = startAngle + (usedOverrides.angleOffset || 0) +
+            (points.curvature || this.spiralGenerator.baseCurvature);
 
         // Store spiral data
         node.spiralData = {
@@ -265,6 +380,9 @@ class TreeLayoutEngine {
             depth: depth,
             scale: scale
         };
+
+        // Track this spiral for future intersection checks
+        this.allSpirals.push({ points });
 
         // Track occupied regions for space-aware branching
         this.occupiedPoints.push(

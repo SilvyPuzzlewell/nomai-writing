@@ -4,6 +4,34 @@
  */
 
 // Copy the spiral generation code for testing (Node.js doesn't have window)
+function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+    const ccw = (px, py, qx, qy, rx, ry) =>
+        (ry - py) * (qx - px) > (qy - py) * (rx - px);
+    return ccw(ax1, ay1, bx1, by1, bx2, by2) !== ccw(ax2, ay2, bx1, by1, bx2, by2) &&
+           ccw(ax1, ay1, ax2, ay2, bx1, by1) !== ccw(ax1, ay1, ax2, ay2, bx2, by2);
+}
+
+function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 5) {
+    for (const existing of existingSpirals) {
+        if (!existing.points) continue;
+        const existingPoints = existing.points;
+
+        for (let i = skipSegments; i < newPoints.length - 1; i++) {
+            for (let j = skipSegments; j < existingPoints.length - 1; j++) {
+                if (segmentsIntersect(
+                    newPoints[i].x, newPoints[i].y,
+                    newPoints[i + 1].x, newPoints[i + 1].y,
+                    existingPoints[j].x, existingPoints[j].y,
+                    existingPoints[j + 1].x, existingPoints[j + 1].y
+                )) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 function seededRandom(seed) {
     const x = Math.sin(seed * 9301 + 49297) * 233280;
     return x - Math.floor(x);
@@ -20,24 +48,30 @@ function seededRandoms(seed, count) {
 class SpiralGenerator {
     constructor(options = {}) {
         this.baseLength = options.length || 280;
-        this.baseCurvature = options.curvature || 3.0;
+        this.baseCurvature = options.curvature || 3.2;
         this.numPoints = options.numPoints || 50;
     }
 
-    generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0, forceCurvatureSign = null, curvatureScale = 1) {
+    generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0, overrides = {}) {
         const points = [];
         const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
-        const length = this.baseLength * scale * (0.85 + rLen * 0.3);
-        const curvatureSign = forceCurvatureSign !== null ? forceCurvatureSign : (rDir > 0.5 ? 1 : -1);
+
+        const lengthScale = overrides.lengthScale ?? 1;
+        const curvatureScale = overrides.curvatureScale ?? 1;
+        const angleOffset = overrides.angleOffset ?? 0;
+
+        const length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
+        const curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
         const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
 
+        const adjustedStartAngle = startAngle + angleOffset;
         const dt = 1 / this.numPoints;
         let x = centerX;
         let y = centerY;
 
         for (let i = 0; i <= this.numPoints; i++) {
             const t = i / this.numPoints;
-            const theta = startAngle + curvature * t;
+            const theta = adjustedStartAngle + curvature * t;
             points.push({ x, y, theta, progress: t });
 
             if (i < this.numPoints) {
@@ -51,45 +85,21 @@ class SpiralGenerator {
     }
 }
 
-function segmentsIntersectInternal(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
-    const ccw = (ax, ay, bx, by, cx, cy) =>
-        (cy - ay) * (bx - ax) > (by - ay) * (cx - ax);
-    return ccw(ax1, ay1, bx1, by1, bx2, by2) !== ccw(ax2, ay2, bx1, by1, bx2, by2) &&
-           ccw(ax1, ay1, ax2, ay2, bx1, by1) !== ccw(ax1, ay1, ax2, ay2, bx2, by2);
-}
-
-function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 5) {
-    for (const existing of existingSpirals) {
-        if (!existing.spiralData || !existing.spiralData.points) continue;
-        const existingPoints = existing.spiralData.points;
-
-        for (let i = skipSegments; i < newPoints.length - 1; i++) {
-            for (let j = skipSegments; j < existingPoints.length - 1; j++) {
-                if (segmentsIntersectInternal(
-                    newPoints[i].x, newPoints[i].y,
-                    newPoints[i + 1].x, newPoints[i + 1].y,
-                    existingPoints[j].x, existingPoints[j].y,
-                    existingPoints[j + 1].x, existingPoints[j + 1].y
-                )) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 class TreeLayoutEngine {
     constructor(canvasWidth, canvasHeight) {
+        this.width = canvasWidth;
+        this.height = canvasHeight;
         this.centerX = canvasWidth / 2;
         this.centerY = canvasHeight / 2;
         this.spiralGenerator = new SpiralGenerator();
+        this.occupiedPoints = [];
         this.allSpirals = [];
     }
 
     layoutTree(messages) {
         if (!messages || messages.length === 0) return [];
 
+        this.occupiedPoints = [];
         this.allSpirals = [];
 
         const messageMap = new Map();
@@ -141,42 +151,94 @@ class TreeLayoutEngine {
         return weight;
     }
 
+    generateParameterVariations(seed) {
+        const variations = [];
+        const [rDir] = seededRandoms(seed, 1);
+        const preferredSign = rDir > 0.5 ? 1 : -1;
+
+        const curvatureSigns = [preferredSign, -preferredSign];
+        const lengthScales = [1.0, 0.75, 0.5];
+        const curvatureScales = [1.0, 0.7, 0.4];
+        const angleOffsets = [0, 0.4, -0.4, 0.8, -0.8];
+
+        for (const lengthScale of lengthScales) {
+            for (const curvatureSign of curvatureSigns) {
+                for (const angleOffset of angleOffsets) {
+                    for (const curvatureScale of curvatureScales) {
+                        variations.push({
+                            curvatureSign,
+                            lengthScale,
+                            curvatureScale,
+                            angleOffset
+                        });
+                    }
+                }
+            }
+        }
+
+        return variations;
+    }
+
+    scoreDirection(fromX, fromY, angle, scale) {
+        const sampleDistance = 150 * scale;
+        const sampleX = fromX + Math.cos(angle) * sampleDistance;
+        const sampleY = fromY + Math.sin(angle) * sampleDistance;
+
+        let minDist = Infinity;
+        for (const pt of this.occupiedPoints) {
+            const d = Math.hypot(sampleX - pt.x, sampleY - pt.y);
+            minDist = Math.min(minDist, d);
+        }
+
+        const margin = 50;
+        if (sampleX < margin || sampleX > this.width - margin ||
+            sampleY < margin || sampleY > this.height - margin) {
+            minDist *= 0.3;
+        }
+
+        return minDist;
+    }
+
+    selectWeightedAngle(candidates) {
+        const totalScore = candidates.reduce((sum, c) => sum + c.score, 0);
+        if (totalScore === 0) return candidates[Math.floor(candidates.length / 2)].angle;
+
+        const r = Math.random();
+        let cumulative = 0;
+        for (const c of candidates) {
+            cumulative += c.score / totalScore;
+            if (r <= cumulative) return c.angle;
+        }
+        return candidates[candidates.length - 1].angle;
+    }
+
     layoutSubtree(node, startX, startY, startAngle, depth, allocatedAngle, parentSpiralData) {
-        const baseScale = Math.max(0.4, 1 - (depth - 1) * 0.1);
+        const scale = Math.max(0.4, 1 - (depth - 1) * 0.15);
+        const variations = this.generateParameterVariations(node.id);
 
-        const [rCurl] = seededRandoms(node.id + 2000, 1);
-        const randomCurlSign = rCurl > 0.5 ? 1 : -1;
+        let points = null;
+        let usedOverrides = {};
 
-        let points;
-        const maxAttempts = 30;
-
-        for (let i = 0; i < maxAttempts; i++) {
-            const curlSign = (i % 2 === 0) ? randomCurlSign : -randomCurlSign;
-            const stage = Math.floor(i / 4);
-
-            const scaleMultiplier = Math.max(0.25, 1.0 - stage * 0.12);
-            const curvatureScale = Math.max(0.15, 1.0 - stage * 0.1);
-
-            const angleVariant = i % 4;
-            let angleAdjust = 0;
-            if (angleVariant === 1) angleAdjust = 0.3 + stage * 0.1;
-            else if (angleVariant === 2) angleAdjust = -(0.3 + stage * 0.1);
-            else if (angleVariant === 3) angleAdjust = 0.6 + stage * 0.15;
-
-            const scale = baseScale * scaleMultiplier;
-            const adjustedAngle = startAngle + angleAdjust;
+        for (let attempt = 0; attempt < variations.length; attempt++) {
+            const overrides = variations[attempt];
 
             points = this.spiralGenerator.generateSpiralPoints(
-                startX, startY, adjustedAngle, scale, node.id, curlSign, curvatureScale
+                startX, startY, startAngle, scale, node.id, overrides
             );
 
             if (!checkSpiralIntersection(points, this.allSpirals)) {
+                usedOverrides = overrides;
                 break;
+            }
+
+            if (attempt === variations.length - 1) {
+                usedOverrides = overrides;
             }
         }
 
         const endPoint = points[points.length - 1];
-        const endAngle = startAngle + (points.curvature || this.spiralGenerator.baseCurvature);
+        const endAngle = startAngle + (usedOverrides.angleOffset || 0) +
+            (points.curvature || this.spiralGenerator.baseCurvature);
 
         node.spiralData = {
             points,
@@ -184,19 +246,25 @@ class TreeLayoutEngine {
             endX: endPoint.x, endY: endPoint.y,
             startAngle, endAngle,
             curvature: points.curvature,
-            depth, scale: baseScale
+            depth, scale
         };
 
-        this.allSpirals.push(node);
+        this.allSpirals.push({ points });
+
+        this.occupiedPoints.push(
+            { x: startX, y: startY },
+            { x: endPoint.x, y: endPoint.y }
+        );
+        const midIdx = Math.floor(points.length / 2);
+        this.occupiedPoints.push({ x: points[midIdx].x, y: points[midIdx].y });
 
         if (node.children.length > 0) {
             const numChildren = node.children.length;
 
             node.children.forEach((child, index) => {
+                const baseT = 0.3 + (index / Math.max(1, numChildren - 1)) * 0.55;
                 const [rBranch] = seededRandoms(child.id + 500, 1);
-                const baseT = 0.4 + (index / Math.max(1, numChildren)) * 0.5;
-                const randomOffset = (rBranch - 0.5) * 0.2;
-                const branchT = Math.max(0.3, Math.min(0.95, baseT + randomOffset));
+                const branchT = Math.max(0.25, Math.min(0.9, baseT + (rBranch - 0.5) * 0.15));
 
                 const branchIndex = Math.floor(branchT * (points.length - 1));
                 const branchPoint = points[branchIndex];
@@ -205,13 +273,22 @@ class TreeLayoutEngine {
                 const childStartY = branchPoint.y;
 
                 const parentTangent = branchPoint.theta;
-                const [rAngle, rSide] = seededRandoms(child.id + 1000, 2);
-                const side = (index % 2 === 0) ? (rSide > 0.5 ? 1 : -1) : (rSide > 0.5 ? -1 : 1);
-                const baseAngle = side * (Math.PI / 4 + rAngle * Math.PI / 4);
-                const siblingSpread = Math.floor(index / 2) * 0.15 * side;
-                const angleOffset = baseAngle + siblingSpread;
-                const childAngle = parentTangent + angleOffset;
+                const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
+                const outwardDir = parentCurvature > 0 ? -1 : 1;
+                const baseAngle = parentTangent + outwardDir * Math.PI / 2;
 
+                const candidates = [];
+                const numCandidates = 5;
+                const spreadAngle = Math.PI / 3;
+
+                for (let i = 0; i < numCandidates; i++) {
+                    const t = i / (numCandidates - 1);
+                    const candidateAngle = baseAngle + (t - 0.5) * spreadAngle;
+                    const score = this.scoreDirection(childStartX, childStartY, candidateAngle, scale);
+                    candidates.push({ angle: candidateAngle, score });
+                }
+
+                const childAngle = this.selectWeightedAngle(candidates);
                 const childAllocatedAngle = allocatedAngle * (child.subtreeWeight / node.subtreeWeight) * 0.8;
 
                 this.layoutSubtree(
@@ -223,53 +300,31 @@ class TreeLayoutEngine {
     }
 }
 
-// Line segment intersection detection
-function ccw(A, B, C) {
-    return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-}
-
-function segmentsIntersect(A, B, C, D) {
-    return ccw(A, C, D) !== ccw(B, C, D) && ccw(A, B, C) !== ccw(A, B, D);
-}
-
-function getSegments(spiralData) {
-    const segments = [];
-    const points = spiralData.points;
-    for (let i = 0; i < points.length - 1; i++) {
-        segments.push({
-            start: { x: points[i].x, y: points[i].y },
-            end: { x: points[i + 1].x, y: points[i + 1].y },
-            index: i
-        });
-    }
-    return segments;
-}
-
+// Verification function to find any remaining intersections
 function findIntersections(layoutNodes) {
     const intersections = [];
     const spirals = layoutNodes.filter(n => n.spiralData);
 
     for (let i = 0; i < spirals.length; i++) {
         for (let j = i + 1; j < spirals.length; j++) {
-            const segmentsA = getSegments(spirals[i].spiralData);
-            const segmentsB = getSegments(spirals[j].spiralData);
+            const pointsA = spirals[i].spiralData.points;
+            const pointsB = spirals[j].spiralData.points;
 
-            // Skip first few segments of child if it branches from parent
-            // (they will naturally share the branch point)
             const isParentChild = spirals[j].parent_id === spirals[i].id ||
                                   spirals[i].parent_id === spirals[j].id;
 
-            // Skip first 5 segments on both spirals (near branch points)
             const skipSegments = 5;
-            for (const segA of segmentsA) {
-                if (segA.index < skipSegments) continue;
-                for (const segB of segmentsB) {
-                    if (segB.index < skipSegments) continue;
-
-                    if (segmentsIntersect(segA.start, segA.end, segB.start, segB.end)) {
+            for (let a = skipSegments; a < pointsA.length - 1; a++) {
+                for (let b = skipSegments; b < pointsB.length - 1; b++) {
+                    if (segmentsIntersect(
+                        pointsA[a].x, pointsA[a].y,
+                        pointsA[a + 1].x, pointsA[a + 1].y,
+                        pointsB[b].x, pointsB[b].y,
+                        pointsB[b + 1].x, pointsB[b + 1].y
+                    )) {
                         intersections.push({
-                            spiral1: { id: spirals[i].id, segment: segA.index },
-                            spiral2: { id: spirals[j].id, segment: segB.index },
+                            spiral1: { id: spirals[i].id, segment: a },
+                            spiral2: { id: spirals[j].id, segment: b },
                             isParentChild
                         });
                     }
@@ -284,7 +339,7 @@ function findIntersections(layoutNodes) {
 // Test cases
 const testCases = [
     {
-        name: "The Spiral Display Problem (13 messages, deep tree with branch)",
+        name: "Deep tree with branch (13 messages)",
         messages: [
             { id: 33, parent_id: null },
             { id: 34, parent_id: 33 },
@@ -296,7 +351,7 @@ const testCases = [
             { id: 40, parent_id: 39 },
             { id: 41, parent_id: 40 },
             { id: 42, parent_id: 41 },
-            { id: 43, parent_id: 41 },  // Branch here - two children of 41
+            { id: 43, parent_id: 41 },
             { id: 44, parent_id: 43 },
             { id: 45, parent_id: 44 }
         ]
@@ -324,14 +379,14 @@ const testCases = [
         ]
     },
     {
-        name: "Deep linear chain",
+        name: "Deep linear chain (15 messages)",
         messages: Array.from({ length: 15 }, (_, i) => ({
             id: i + 1,
             parent_id: i === 0 ? null : i
         }))
     },
     {
-        name: "Binary tree",
+        name: "Binary tree (7 messages)",
         messages: [
             { id: 1, parent_id: null },
             { id: 2, parent_id: 1 },
@@ -341,6 +396,13 @@ const testCases = [
             { id: 6, parent_id: 3 },
             { id: 7, parent_id: 3 }
         ]
+    },
+    {
+        name: "Very deep chain (20 messages)",
+        messages: Array.from({ length: 20 }, (_, i) => ({
+            id: i + 1,
+            parent_id: i === 0 ? null : i
+        }))
     }
 ];
 
