@@ -190,7 +190,17 @@ select:focus {
     flex: 1;
     padding: 20px;
     overflow-y: auto;
+    overflow-x: hidden;
     line-height: 1.6;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+#message-content p {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    word-break: break-all;
 }
 
 #message-content .placeholder {

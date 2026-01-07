@@ -245,8 +245,10 @@ class NomaiCanvas {
 
     /**
      * Start or resume color transition for a message.
+     * @param {number} id - Message ID
+     * @param {number} duration - Animation duration in ms (default 5000)
      */
-    startTransition(id) {
+    startTransition(id, duration = 5000) {
         // Already fully translated
         if (this.translatedIds.has(id)) {
             return 1;
@@ -254,8 +256,6 @@ class NomaiCanvas {
 
         // Stop any existing transition
         this.pauseTransition();
-
-        const duration = 5000; // ms
         const startProgress = this.transitionProgress.get(id) || 0;
         const remainingDuration = duration * (1 - startProgress);
         const startTime = performance.now();

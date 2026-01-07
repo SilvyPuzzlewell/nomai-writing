@@ -190,8 +190,13 @@ class NomaiApp {
     handleMouseDown(message) {
         if (!message) return;
 
+        // Calculate duration based on message length (constant chars per second)
+        const totalChars = message.writer_name.length + message.content.length;
+        const charsPerSecond = 15;
+        const duration = (totalChars / charsPerSecond) * 1000;
+
         // Start spiral color transition
-        const startProgress = this.canvas.startTransition(message.id);
+        const startProgress = this.canvas.startTransition(message.id, duration);
 
         // Start text animation from current progress
         this.startTextAnimation(message, startProgress);
@@ -237,7 +242,8 @@ class NomaiApp {
         const writerText = message.writer_name;
         const contentText = message.content;
         const totalChars = writerText.length + contentText.length;
-        const duration = 5000;
+        const charsPerSecond = 15; // Constant rate regardless of length
+        const duration = (totalChars / charsPerSecond) * 1000;
         const startTime = performance.now();
 
         // Store current message for tracking

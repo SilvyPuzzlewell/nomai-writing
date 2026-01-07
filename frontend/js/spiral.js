@@ -113,9 +113,12 @@ class SpiralGenerator {
  */
 class TreeLayoutEngine {
     constructor(canvasWidth, canvasHeight) {
+        this.width = canvasWidth;
+        this.height = canvasHeight;
         this.centerX = canvasWidth / 2;
         this.centerY = canvasHeight / 2;
         this.spiralGenerator = new SpiralGenerator();
+        this.occupiedPoints = [];
     }
 
     /**
@@ -123,6 +126,9 @@ class TreeLayoutEngine {
      */
     layoutTree(messages) {
         if (!messages || messages.length === 0) return [];
+
+        // Reset occupied points for fresh layout
+        this.occupiedPoints = [];
 
         // Build message map and find roots
         const messageMap = new Map();
@@ -184,6 +190,48 @@ class TreeLayoutEngine {
     }
 
     /**
+     * Score how "open" a direction is from a given point.
+     * Higher score = more empty space in that direction.
+     */
+    scoreDirection(fromX, fromY, angle, scale) {
+        const sampleDistance = 150 * scale;
+        const sampleX = fromX + Math.cos(angle) * sampleDistance;
+        const sampleY = fromY + Math.sin(angle) * sampleDistance;
+
+        // Find minimum distance to any occupied point
+        let minDist = Infinity;
+        for (const pt of this.occupiedPoints) {
+            const d = Math.hypot(sampleX - pt.x, sampleY - pt.y);
+            minDist = Math.min(minDist, d);
+        }
+
+        // Penalize directions that go off-canvas
+        const margin = 50;
+        if (sampleX < margin || sampleX > this.width - margin ||
+            sampleY < margin || sampleY > this.height - margin) {
+            minDist *= 0.3;
+        }
+
+        return minDist;
+    }
+
+    /**
+     * Select angle from candidates using weighted random (non-deterministic).
+     */
+    selectWeightedAngle(candidates) {
+        const totalScore = candidates.reduce((sum, c) => sum + c.score, 0);
+        if (totalScore === 0) return candidates[Math.floor(candidates.length / 2)].angle;
+
+        const r = Math.random();
+        let cumulative = 0;
+        for (const c of candidates) {
+            cumulative += c.score / totalScore;
+            if (r <= cumulative) return c.angle;
+        }
+        return candidates[candidates.length - 1].angle;
+    }
+
+    /**
      * Recursively layout a subtree within an allocated angle range.
      * parentSpiralData is used to determine branch point and outward direction.
      */
@@ -218,6 +266,14 @@ class TreeLayoutEngine {
             scale: scale
         };
 
+        // Track occupied regions for space-aware branching
+        this.occupiedPoints.push(
+            { x: startX, y: startY },
+            { x: endPoint.x, y: endPoint.y }
+        );
+        const midIdx = Math.floor(points.length / 2);
+        this.occupiedPoints.push({ x: points[midIdx].x, y: points[midIdx].y });
+
         // Layout children - they branch from various points along this spiral
         if (node.children.length > 0) {
             const numChildren = node.children.length;
@@ -240,18 +296,25 @@ class TreeLayoutEngine {
                 const childStartX = branchPoint.x;
                 const childStartY = branchPoint.y;
 
-                // Calculate child's starting angle - branch OUTWARD from the parent's curl
-                // The parent curls in direction of increasing theta
-                // Child should branch perpendicular, to the outside of the curl
+                // Calculate child's starting angle - branch towards unexplored regions
                 const parentTangent = branchPoint.theta;
                 const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
+                const outwardDir = parentCurvature > 0 ? -1 : 1;
+                const baseAngle = parentTangent + outwardDir * Math.PI / 2;
 
-                // Branch outward: perpendicular to tangent, on the outside of the curl
-                // Direction depends on parent's curl direction (sign of curvature)
-                const [rAngle] = seededRandoms(child.id + 1000, 1);
-                const outwardDir = parentCurvature > 0 ? -1 : 1; // Opposite to curl direction
-                const angleOffset = outwardDir * Math.PI / 2 + (rAngle - 0.5) * 0.6; // Outward with variance
-                const childAngle = parentTangent + angleOffset;
+                // Generate candidate angles and score them by distance to occupied regions
+                const candidates = [];
+                const numCandidates = 5;
+                const spreadAngle = Math.PI / 3; // ±60° spread around base
+
+                for (let i = 0; i < numCandidates; i++) {
+                    const t = i / (numCandidates - 1);
+                    const candidateAngle = baseAngle + (t - 0.5) * spreadAngle;
+                    const score = this.scoreDirection(childStartX, childStartY, candidateAngle, scale);
+                    candidates.push({ angle: candidateAngle, score });
+                }
+
+                const childAngle = this.selectWeightedAngle(candidates);
 
                 // Give each child a portion of the allocated angle for its subtree
                 const childAllocatedAngle = allocatedAngle * (child.subtreeWeight / node.subtreeWeight) * 0.8;
@@ -273,6 +336,8 @@ class TreeLayoutEngine {
      * Update dimensions when canvas resizes.
      */
     updateDimensions(width, height) {
+        this.width = width;
+        this.height = height;
         this.centerX = width / 2;
         this.centerY = height / 2;
     }
