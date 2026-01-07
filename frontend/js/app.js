@@ -53,6 +53,11 @@ class NomaiApp {
             this.showThreadModal();
         });
 
+        // Regenerate layout button
+        document.getElementById('regenerate-btn').addEventListener('click', () => {
+            this.handleRegenerateLayout();
+        });
+
         // Clear board button
         document.getElementById('clear-thread-btn').addEventListener('click', () => {
             this.handleClearBoard();
@@ -132,10 +137,24 @@ class NomaiApp {
             const thread = await api.getThread(threadId);
             this.currentThreadId = threadId;
             this.canvas.clearTranslated(); // Reset translated state for new thread
-            this.canvas.setMessages(thread.messages);
+            this.canvas.setMessages(thread.messages, (layouts) => {
+                // Save newly generated layouts to the database
+                this.saveLayouts(threadId, layouts);
+            });
             this.clearSelection();
         } catch (err) {
             console.error('Failed to load thread:', err);
+        }
+    }
+
+    /**
+     * Save layout data to the server.
+     */
+    async saveLayouts(threadId, layouts) {
+        try {
+            await api.saveLayouts(threadId, layouts);
+        } catch (err) {
+            console.error('Failed to save layouts:', err);
         }
     }
 
@@ -164,6 +183,22 @@ class NomaiApp {
             } catch (err) {
                 console.error('Failed to delete thread:', err);
             }
+        }
+    }
+
+    /**
+     * Handle regenerate layout button.
+     */
+    async handleRegenerateLayout() {
+        if (!this.currentThreadId) return;
+
+        try {
+            // Clear saved layouts on server
+            await api.clearLayouts(this.currentThreadId);
+            // Reload thread (will regenerate and save new layouts)
+            await this.loadThread(this.currentThreadId);
+        } catch (err) {
+            console.error('Failed to regenerate layout:', err);
         }
     }
 

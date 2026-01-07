@@ -73,6 +73,33 @@ const api = {
         });
         if (!response.ok) throw new Error('Failed to delete message');
         return response.json();
+    },
+
+    /**
+     * Save layout data for messages in a thread.
+     * @param {number} threadId - Thread ID
+     * @param {Object} layouts - Map of message ID to layout data JSON string
+     */
+    async saveLayouts(threadId, layouts) {
+        const response = await fetch(`${API_BASE}/threads/${threadId}/layouts`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ layouts })
+        });
+        if (!response.ok) throw new Error('Failed to save layouts');
+        return response.json();
+    },
+
+    /**
+     * Clear layout data for a thread (triggers regeneration).
+     * @param {number} threadId - Thread ID
+     */
+    async clearLayouts(threadId) {
+        const response = await fetch(`${API_BASE}/threads/${threadId}/layouts`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to clear layouts');
+        return response.json();
     }
 };
 

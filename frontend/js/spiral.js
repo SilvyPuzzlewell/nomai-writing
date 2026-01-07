@@ -326,35 +326,49 @@ class TreeLayoutEngine {
      * Recursively layout a subtree within an allocated angle range.
      * parentSpiralData is used to determine branch point and outward direction.
      * Uses intersection detection and retries with different parameters if needed.
+     * If node has saved layout_data, uses those parameters for deterministic replay.
      */
     layoutSubtree(node, startX, startY, startAngle, depth, allocatedAngle, parentSpiralData) {
         // Scale down spirals for deeper messages
         const scale = Math.max(0.4, 1 - (depth - 1) * 0.15);
 
-        // Generate parameter variations for collision avoidance
-        const variations = this.generateParameterVariations(node.id);
-
         let points = null;
         let usedOverrides = {};
 
-        // Try each variation until we find one that doesn't intersect
-        for (let attempt = 0; attempt < variations.length; attempt++) {
-            const overrides = variations[attempt];
+        // Check for saved layout data
+        const savedLayout = node.layout_data ? JSON.parse(node.layout_data) : null;
 
+        if (savedLayout && savedLayout.overrides) {
+            // Use saved overrides for deterministic replay
+            usedOverrides = savedLayout.overrides;
             points = this.spiralGenerator.generateSpiralPoints(
-                startX, startY, startAngle, scale, node.id, overrides
+                startX, startY, startAngle, scale, node.id, usedOverrides
             );
+        } else {
+            // Generate parameter variations for collision avoidance
+            const variations = this.generateParameterVariations(node.id);
 
-            // Check for intersection with existing spirals
-            if (!checkSpiralIntersection(points, this.allSpirals)) {
-                usedOverrides = overrides;
-                break; // Found a non-intersecting configuration
-            }
+            // Try each variation until we find one that doesn't intersect
+            for (let attempt = 0; attempt < variations.length; attempt++) {
+                const overrides = variations[attempt];
 
-            // If this is the last attempt, use it anyway (best effort)
-            if (attempt === variations.length - 1) {
-                usedOverrides = overrides;
+                points = this.spiralGenerator.generateSpiralPoints(
+                    startX, startY, startAngle, scale, node.id, overrides
+                );
+
+                // Check for intersection with existing spirals
+                if (!checkSpiralIntersection(points, this.allSpirals)) {
+                    usedOverrides = overrides;
+                    break; // Found a non-intersecting configuration
+                }
+
+                // If this is the last attempt, use it anyway (best effort)
+                if (attempt === variations.length - 1) {
+                    usedOverrides = overrides;
+                }
             }
+            // Mark that this node needs its layout saved
+            node.needsLayoutSave = true;
         }
 
         const bezierPath = this.spiralGenerator.pointsToBezierPath(points);
@@ -366,7 +380,7 @@ class TreeLayoutEngine {
         const endAngle = startAngle + (usedOverrides.angleOffset || 0) +
             (points.curvature || this.spiralGenerator.baseCurvature);
 
-        // Store spiral data
+        // Store spiral data with layout params for persistence
         node.spiralData = {
             points: points,
             bezierPath: bezierPath,
@@ -378,7 +392,14 @@ class TreeLayoutEngine {
             endAngle: endAngle,
             curvature: points.curvature,
             depth: depth,
-            scale: scale
+            scale: scale,
+            // Layout params for persistence (normalized to canvas center)
+            layoutParams: {
+                offsetX: startX - this.centerX,
+                offsetY: startY - this.centerY,
+                startAngle: startAngle,
+                overrides: usedOverrides
+            }
         };
 
         // Track this spiral for future intersection checks
@@ -414,25 +435,34 @@ class TreeLayoutEngine {
                 const childStartX = branchPoint.x;
                 const childStartY = branchPoint.y;
 
-                // Calculate child's starting angle - branch towards unexplored regions
-                const parentTangent = branchPoint.theta;
-                const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
-                const outwardDir = parentCurvature > 0 ? -1 : 1;
-                const baseAngle = parentTangent + outwardDir * Math.PI / 2;
+                // Check for saved child angle
+                const childSavedLayout = child.layout_data ? JSON.parse(child.layout_data) : null;
+                let childAngle;
 
-                // Generate candidate angles and score them by distance to occupied regions
-                const candidates = [];
-                const numCandidates = 5;
-                const spreadAngle = Math.PI / 3; // ±60° spread around base
+                if (childSavedLayout && childSavedLayout.startAngle !== undefined) {
+                    // Use saved angle for deterministic replay
+                    childAngle = childSavedLayout.startAngle;
+                } else {
+                    // Calculate child's starting angle - branch towards unexplored regions
+                    const parentTangent = branchPoint.theta;
+                    const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
+                    const outwardDir = parentCurvature > 0 ? -1 : 1;
+                    const baseAngle = parentTangent + outwardDir * Math.PI / 2;
 
-                for (let i = 0; i < numCandidates; i++) {
-                    const t = i / (numCandidates - 1);
-                    const candidateAngle = baseAngle + (t - 0.5) * spreadAngle;
-                    const score = this.scoreDirection(childStartX, childStartY, candidateAngle, scale);
-                    candidates.push({ angle: candidateAngle, score });
+                    // Generate candidate angles and score them by distance to occupied regions
+                    const candidates = [];
+                    const numCandidates = 5;
+                    const spreadAngle = Math.PI / 3; // ±60° spread around base
+
+                    for (let i = 0; i < numCandidates; i++) {
+                        const t = i / (numCandidates - 1);
+                        const candidateAngle = baseAngle + (t - 0.5) * spreadAngle;
+                        const score = this.scoreDirection(childStartX, childStartY, candidateAngle, scale);
+                        candidates.push({ angle: candidateAngle, score });
+                    }
+
+                    childAngle = this.selectWeightedAngle(candidates);
                 }
-
-                const childAngle = this.selectWeightedAngle(candidates);
 
                 // Give each child a portion of the allocated angle for its subtree
                 const childAllocatedAngle = allocatedAngle * (child.subtreeWeight / node.subtreeWeight) * 0.8;

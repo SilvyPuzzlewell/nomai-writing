@@ -64,11 +64,21 @@ class NomaiCanvas {
 
     /**
      * Set messages and compute layout.
+     * @param {Array} messages - Messages from API (may include layout_data)
+     * @param {Function} onLayoutsGenerated - Callback with layouts to save
      */
-    setMessages(messages) {
+    setMessages(messages, onLayoutsGenerated = null) {
         this.rawMessages = messages;
         this.relayout();
         this.render();
+
+        // Check if any messages need their layouts saved
+        if (onLayoutsGenerated) {
+            const layoutsToSave = this.getLayoutsToSave();
+            if (Object.keys(layoutsToSave).length > 0) {
+                onLayoutsGenerated(layoutsToSave);
+            }
+        }
     }
 
     /**
@@ -79,6 +89,23 @@ class NomaiCanvas {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
         this.messages = this.layoutEngine.layoutTree(this.rawMessages || []);
+    }
+
+    /**
+     * Get layout data for messages that need saving.
+     * @returns {Object} Map of message ID to layout JSON string
+     */
+    getLayoutsToSave() {
+        const layouts = {};
+        this.messages.forEach(msg => {
+            if (msg.needsLayoutSave && msg.spiralData && msg.spiralData.layoutParams) {
+                layouts[msg.id] = JSON.stringify({
+                    startAngle: msg.spiralData.layoutParams.startAngle,
+                    overrides: msg.spiralData.layoutParams.overrides
+                });
+            }
+        });
+        return layouts;
     }
 
     /**

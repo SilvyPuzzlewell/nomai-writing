@@ -20,6 +20,7 @@ def init_db():
                 parent_id INTEGER,
                 writer_name TEXT NOT NULL,
                 content TEXT NOT NULL,
+                layout_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
                 FOREIGN KEY (parent_id) REFERENCES messages(id) ON DELETE CASCADE
@@ -28,6 +29,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
             CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
         ''')
+        # Add layout_data column if it doesn't exist (migration for existing DBs)
+        try:
+            conn.execute('ALTER TABLE messages ADD COLUMN layout_data TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
 @contextmanager
 def get_connection():
@@ -68,7 +74,7 @@ def get_thread_with_messages(thread_id):
 
         # Get messages
         cursor = conn.execute('''
-            SELECT id, thread_id, parent_id, writer_name, content, created_at
+            SELECT id, thread_id, parent_id, writer_name, content, layout_data, created_at
             FROM messages
             WHERE thread_id = ?
             ORDER BY created_at
@@ -119,4 +125,34 @@ def delete_message(message_id):
     """Delete a message and all its children (cascade)."""
     with get_connection() as conn:
         conn.execute('DELETE FROM messages WHERE id = ?', (message_id,))
+        return True
+
+def update_message_layout(message_id, layout_data):
+    """Update layout data for a single message."""
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE messages SET layout_data = ? WHERE id = ?',
+            (layout_data, message_id)
+        )
+        return True
+
+def update_thread_layouts(thread_id, layouts):
+    """Bulk update layout data for multiple messages in a thread.
+    layouts: dict of {message_id: layout_data_json_string}
+    """
+    with get_connection() as conn:
+        for message_id, layout_data in layouts.items():
+            conn.execute(
+                'UPDATE messages SET layout_data = ? WHERE id = ? AND thread_id = ?',
+                (layout_data, message_id, thread_id)
+            )
+        return True
+
+def clear_thread_layouts(thread_id):
+    """Clear all layout data for a thread (triggers regeneration on next load)."""
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE messages SET layout_data = NULL WHERE thread_id = ?',
+            (thread_id,)
+        )
         return True

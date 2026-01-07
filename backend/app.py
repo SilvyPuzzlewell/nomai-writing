@@ -65,5 +65,22 @@ def delete_message(message_id):
     database.delete_message(message_id)
     return jsonify({'success': True})
 
+@app.route('/api/threads/<int:thread_id>/layouts', methods=['PUT'])
+def update_layouts(thread_id):
+    """Update layout data for multiple messages in a thread."""
+    data = request.get_json()
+
+    if not data or 'layouts' not in data:
+        return jsonify({'error': 'layouts object is required'}), 400
+
+    database.update_thread_layouts(thread_id, data['layouts'])
+    return jsonify({'success': True})
+
+@app.route('/api/threads/<int:thread_id>/layouts', methods=['DELETE'])
+def clear_layouts(thread_id):
+    """Clear all layout data for a thread (triggers regeneration)."""
+    database.clear_thread_layouts(thread_id)
+    return jsonify({'success': True})
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
