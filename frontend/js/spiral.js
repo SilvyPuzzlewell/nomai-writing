@@ -1,30 +1,100 @@
 /**
+ * Sample a point along a cubic Bezier curve at parameter t.
+ */
+function sampleBezierPoint(p0, cp1, cp2, p1, t) {
+    const mt = 1 - t;
+    const mt2 = mt * mt;
+    const mt3 = mt2 * mt;
+    const t2 = t * t;
+    const t3 = t2 * t;
+
+    return {
+        x: mt3 * p0.x + 3 * mt2 * t * cp1.x + 3 * mt * t2 * cp2.x + t3 * p1.x,
+        y: mt3 * p0.y + 3 * mt2 * t * cp1.y + 3 * mt * t2 * cp2.y + t3 * p1.y
+    };
+}
+
+/**
+ * Convert raw spiral points to densely sampled points along the Bezier curves.
+ * This matches the actual rendered curve path.
+ */
+function sampleBezierCurve(points, samplesPerSegment = 4) {
+    if (points.length < 2) return points.map(p => ({ x: p.x, y: p.y }));
+
+    const sampled = [];
+
+    for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[Math.max(0, i - 1)];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[Math.min(points.length - 1, i + 2)];
+
+        // Catmull-Rom to Bezier conversion (same as pointsToBezierPath)
+        const cp1 = {
+            x: p1.x + (p2.x - p0.x) / 6,
+            y: p1.y + (p2.y - p0.y) / 6
+        };
+        const cp2 = {
+            x: p2.x - (p3.x - p1.x) / 6,
+            y: p2.y - (p3.y - p1.y) / 6
+        };
+
+        // Sample this Bezier segment
+        const startJ = (i === 0) ? 0 : 1; // Skip first point after first segment to avoid duplicates
+        for (let j = startJ; j <= samplesPerSegment; j++) {
+            const t = j / samplesPerSegment;
+            sampled.push(sampleBezierPoint(p1, cp1, cp2, p2, t));
+        }
+    }
+
+    return sampled;
+}
+
+/**
  * Check if two line segments intersect.
  * Uses counter-clockwise orientation test.
  */
 function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
-    const ccw = (px, py, qx, qy, rx, ry) =>
-        (ry - py) * (qx - px) > (qy - py) * (rx - px);
-    return ccw(ax1, ay1, bx1, by1, bx2, by2) !== ccw(ax2, ay2, bx1, by1, bx2, by2) &&
-           ccw(ax1, ay1, ax2, ay2, bx1, by1) !== ccw(ax1, ay1, ax2, ay2, bx2, by2);
+    // Standard line segment intersection using cross products
+    const d1x = ax2 - ax1, d1y = ay2 - ay1;
+    const d2x = bx2 - bx1, d2y = by2 - by1;
+
+    const cross = d1x * d2y - d1y * d2x;
+    if (Math.abs(cross) < 1e-10) return false; // Parallel
+
+    const dx = bx1 - ax1, dy = by1 - ay1;
+    const t = (dx * d2y - dy * d2x) / cross;
+    const u = (dx * d1y - dy * d1x) / cross;
+
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
 /**
  * Check if a new spiral intersects with any existing spirals.
+ * Uses sampled Bezier curves to match the actual rendered paths.
  * Skips the first few segments near branch points.
  */
-function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 5) {
-    for (const existing of existingSpirals) {
-        if (!existing.points) continue;
-        const existingPoints = existing.points;
+function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
+    const samplesPerSegment = 4;
+    // Sample the new spiral's Bezier curve
+    const sampledNew = sampleBezierCurve(newPoints, samplesPerSegment);
+    // Adjust skip count for the higher density of sampled points
+    const skipSampled = skipSegments * samplesPerSegment;
 
-        for (let i = skipSegments; i < newPoints.length - 1; i++) {
-            for (let j = skipSegments; j < existingPoints.length - 1; j++) {
+    for (const existing of existingSpirals) {
+        // Use cached sampled points if available, otherwise sample on the fly
+        const sampledExisting = existing.sampledPoints ||
+            (existing.points ? sampleBezierCurve(existing.points, samplesPerSegment) : null);
+
+        if (!sampledExisting) continue;
+
+        for (let i = skipSampled; i < sampledNew.length - 1; i++) {
+            for (let j = skipSampled; j < sampledExisting.length - 1; j++) {
                 if (segmentsIntersect(
-                    newPoints[i].x, newPoints[i].y,
-                    newPoints[i + 1].x, newPoints[i + 1].y,
-                    existingPoints[j].x, existingPoints[j].y,
-                    existingPoints[j + 1].x, existingPoints[j + 1].y
+                    sampledNew[i].x, sampledNew[i].y,
+                    sampledNew[i + 1].x, sampledNew[i + 1].y,
+                    sampledExisting[j].x, sampledExisting[j].y,
+                    sampledExisting[j + 1].x, sampledExisting[j + 1].y
                 )) {
                     return true;
                 }
@@ -299,14 +369,15 @@ class TreeLayoutEngine {
 
         // Try different combinations: curvature direction, length, curvature tightness, angle offset
         const curvatureSigns = [preferredSign, -preferredSign];
-        const lengthScales = [1.0, 0.75, 0.5];
-        const curvatureScales = [1.0, 0.7, 0.4];
-        const angleOffsets = [0, 0.4, -0.4, 0.8, -0.8];
+        const lengthScales = [1.0, 0.7, 0.5, 0.35];
+        const curvatureScales = [1.0, 0.6, 0.3];
+        // Much wider angle range - full circle coverage
+        const angleOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
 
-        // Generate variations in priority order
-        for (const lengthScale of lengthScales) {
+        // Generate variations - try angle offsets first (most effective for avoiding collisions)
+        for (const angleOffset of angleOffsets) {
             for (const curvatureSign of curvatureSigns) {
-                for (const angleOffset of angleOffsets) {
+                for (const lengthScale of lengthScales) {
                     for (const curvatureScale of curvatureScales) {
                         variations.push({
                             curvatureSign,
@@ -349,6 +420,7 @@ class TreeLayoutEngine {
             const variations = this.generateParameterVariations(node.id);
 
             // Try each variation until we find one that doesn't intersect
+            let foundNonIntersecting = false;
             for (let attempt = 0; attempt < variations.length; attempt++) {
                 const overrides = variations[attempt];
 
@@ -357,15 +429,21 @@ class TreeLayoutEngine {
                 );
 
                 // Check for intersection with existing spirals
-                if (!checkSpiralIntersection(points, this.allSpirals)) {
+                const intersects = checkSpiralIntersection(points, this.allSpirals);
+                if (!intersects) {
                     usedOverrides = overrides;
+                    foundNonIntersecting = true;
                     break; // Found a non-intersecting configuration
                 }
 
                 // If this is the last attempt, use it anyway (best effort)
                 if (attempt === variations.length - 1) {
                     usedOverrides = overrides;
+                    console.warn(`Node ${node.id}: Could not find non-intersecting config after ${variations.length} attempts`);
                 }
+            }
+            if (foundNonIntersecting) {
+                console.log(`Node ${node.id}: Found non-intersecting config, allSpirals count: ${this.allSpirals.length}`);
             }
             // Mark that this node needs its layout saved
             node.needsLayoutSave = true;
@@ -403,7 +481,9 @@ class TreeLayoutEngine {
         };
 
         // Track this spiral for future intersection checks
-        this.allSpirals.push({ points });
+        // Cache sampled Bezier points for efficient intersection detection
+        const sampledPoints = sampleBezierCurve(points, 4);
+        this.allSpirals.push({ points, sampledPoints });
 
         // Track occupied regions for space-aware branching
         this.occupiedPoints.push(
