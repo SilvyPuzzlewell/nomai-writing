@@ -72,7 +72,7 @@ function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
 function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
     const samplesPerSegment = 4;
     const sampledNew = sampleBezierCurve(newPoints, samplesPerSegment);
-    const skipSampled = skipSegments * samplesPerSegment;
+    const skipNewSegments = skipSegments * samplesPerSegment;
 
     for (const existing of existingSpirals) {
         const sampledExisting = existing.sampledPoints ||
@@ -80,8 +80,9 @@ function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
 
         if (!sampledExisting) continue;
 
-        for (let i = skipSampled; i < sampledNew.length - 1; i++) {
-            for (let j = skipSampled; j < sampledExisting.length - 1; j++) {
+        // Check new spiral's segments (after skip) against ALL existing segments
+        for (let i = skipNewSegments; i < sampledNew.length - 1; i++) {
+            for (let j = 0; j < sampledExisting.length - 1; j++) {
                 if (segmentsIntersect(
                     sampledNew[i].x, sampledNew[i].y,
                     sampledNew[i + 1].x, sampledNew[i + 1].y,

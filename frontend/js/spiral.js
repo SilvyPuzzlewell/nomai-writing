@@ -72,14 +72,17 @@ function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
 /**
  * Check if a new spiral intersects with any existing spirals.
  * Uses sampled Bezier curves to match the actual rendered paths.
- * Skips the first few segments near branch points.
+ *
+ * Skip logic:
+ * - Skip first few segments of NEW spiral (where it branches from parent)
+ * - Check against ALL segments of existing spirals (they're already placed)
  */
 function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
     const samplesPerSegment = 4;
     // Sample the new spiral's Bezier curve
     const sampledNew = sampleBezierCurve(newPoints, samplesPerSegment);
-    // Adjust skip count for the higher density of sampled points
-    const skipSampled = skipSegments * samplesPerSegment;
+    // Only skip segments at the START of the new spiral (branch point area)
+    const skipNewSegments = skipSegments * samplesPerSegment;
 
     for (const existing of existingSpirals) {
         // Use cached sampled points if available, otherwise sample on the fly
@@ -88,8 +91,9 @@ function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
 
         if (!sampledExisting) continue;
 
-        for (let i = skipSampled; i < sampledNew.length - 1; i++) {
-            for (let j = skipSampled; j < sampledExisting.length - 1; j++) {
+        // Check new spiral's segments (after skip) against ALL existing segments
+        for (let i = skipNewSegments; i < sampledNew.length - 1; i++) {
+            for (let j = 0; j < sampledExisting.length - 1; j++) {
                 if (segmentsIntersect(
                     sampledNew[i].x, sampledNew[i].y,
                     sampledNew[i + 1].x, sampledNew[i + 1].y,
