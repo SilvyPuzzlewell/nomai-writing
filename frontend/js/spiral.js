@@ -50,6 +50,135 @@ function sampleBezierCurve(points, samplesPerSegment = 4) {
     return sampled;
 }
 
+// ============================================================================
+// Analytical Bezier-Bezier Intersection Detection
+// Uses recursive subdivision with bounding box culling
+// ============================================================================
+
+/**
+ * Compute midpoint between two points.
+ */
+function midpoint(a, b) {
+    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+/**
+ * Compute axis-aligned bounding box for a cubic Bezier curve.
+ * For cubic Bezier, curve is contained within convex hull of control points.
+ */
+function bezierBoundingBox(p0, cp1, cp2, p1) {
+    return {
+        minX: Math.min(p0.x, cp1.x, cp2.x, p1.x),
+        maxX: Math.max(p0.x, cp1.x, cp2.x, p1.x),
+        minY: Math.min(p0.y, cp1.y, cp2.y, p1.y),
+        maxY: Math.max(p0.y, cp1.y, cp2.y, p1.y)
+    };
+}
+
+/**
+ * Check if two axis-aligned bounding boxes overlap.
+ */
+function boxesOverlap(box1, box2) {
+    return !(box1.maxX < box2.minX || box2.maxX < box1.minX ||
+             box1.maxY < box2.minY || box2.maxY < box1.minY);
+}
+
+/**
+ * Split a cubic Bezier curve at t=0.5 using de Casteljau's algorithm.
+ * Returns two Bezier curves (left and right halves).
+ */
+function splitBezier(p0, cp1, cp2, p1) {
+    const m01 = midpoint(p0, cp1);
+    const m12 = midpoint(cp1, cp2);
+    const m23 = midpoint(cp2, p1);
+    const m012 = midpoint(m01, m12);
+    const m123 = midpoint(m12, m23);
+    const mid = midpoint(m012, m123);
+
+    return {
+        left: { p0: p0, cp1: m01, cp2: m012, p1: mid },
+        right: { p0: mid, cp1: m123, cp2: m23, p1: p1 }
+    };
+}
+
+/**
+ * Check if two cubic Bezier curves intersect using recursive subdivision.
+ * This is an analytical approach that converges to true intersections.
+ *
+ * @param {Object} curve1 - First Bezier curve {p0, cp1, cp2, p1}
+ * @param {Object} curve2 - Second Bezier curve {p0, cp1, cp2, p1}
+ * @param {number} depth - Current recursion depth
+ * @param {number} maxDepth - Maximum recursion depth (default 16)
+ * @param {number} tolerance - Size threshold for convergence (default 0.5 pixels)
+ * @returns {boolean} True if curves intersect
+ */
+function bezierCurvesIntersect(curve1, curve2, depth = 0, maxDepth = 16, tolerance = 0.5) {
+    // Get bounding boxes
+    const box1 = bezierBoundingBox(curve1.p0, curve1.cp1, curve1.cp2, curve1.p1);
+    const box2 = bezierBoundingBox(curve2.p0, curve2.cp1, curve2.cp2, curve2.p1);
+
+    // Quick reject if boxes don't overlap
+    if (!boxesOverlap(box1, box2)) return false;
+
+    // Compute sizes of bounding boxes
+    const size1 = Math.max(box1.maxX - box1.minX, box1.maxY - box1.minY);
+    const size2 = Math.max(box2.maxX - box2.minX, box2.maxY - box2.minY);
+
+    // If both curves are small enough and overlapping, intersection found
+    if (size1 < tolerance && size2 < tolerance) {
+        return true;
+    }
+
+    // Max depth reached - assume intersection if boxes still overlap
+    if (depth >= maxDepth) return true;
+
+    // Subdivide the larger curve and recurse
+    if (size1 > size2) {
+        const { left, right } = splitBezier(curve1.p0, curve1.cp1, curve1.cp2, curve1.p1);
+        return bezierCurvesIntersect(left, curve2, depth + 1, maxDepth, tolerance) ||
+               bezierCurvesIntersect(right, curve2, depth + 1, maxDepth, tolerance);
+    } else {
+        const { left, right } = splitBezier(curve2.p0, curve2.cp1, curve2.cp2, curve2.p1);
+        return bezierCurvesIntersect(curve1, left, depth + 1, maxDepth, tolerance) ||
+               bezierCurvesIntersect(curve1, right, depth + 1, maxDepth, tolerance);
+    }
+}
+
+/**
+ * Convert spiral points to array of Bezier curve segments.
+ * Uses Catmull-Rom to Bezier conversion.
+ */
+function pointsToBezierSegments(points) {
+    if (points.length < 2) return [];
+
+    const segments = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const p0 = points[Math.max(0, i - 1)];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[Math.min(points.length - 1, i + 2)];
+
+        // Catmull-Rom to Bezier conversion
+        segments.push({
+            p0: { x: p1.x, y: p1.y },
+            cp1: {
+                x: p1.x + (p2.x - p0.x) / 6,
+                y: p1.y + (p2.y - p0.y) / 6
+            },
+            cp2: {
+                x: p2.x - (p3.x - p1.x) / 6,
+                y: p2.y - (p3.y - p1.y) / 6
+            },
+            p1: { x: p2.x, y: p2.y }
+        });
+    }
+    return segments;
+}
+
+// ============================================================================
+// Legacy line segment intersection (kept for compatibility)
+// ============================================================================
+
 /**
  * Check if two line segments intersect.
  * Uses counter-clockwise orientation test.
@@ -71,35 +200,27 @@ function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
 
 /**
  * Check if a new spiral intersects with any existing spirals.
- * Uses sampled Bezier curves to match the actual rendered paths.
+ * Uses analytical Bezier-Bezier intersection detection via recursive subdivision.
  *
  * Skip logic:
- * - Skip first few segments of NEW spiral (where it branches from parent)
- * - Check against ALL segments of existing spirals (they're already placed)
+ * - Skip first few Bezier segments of NEW spiral (branch point area)
+ * - Check against ALL segments of existing spirals
  */
 function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
-    const samplesPerSegment = 4;
-    // Sample the new spiral's Bezier curve
-    const sampledNew = sampleBezierCurve(newPoints, samplesPerSegment);
-    // Only skip segments at the START of the new spiral (branch point area)
-    const skipNewSegments = skipSegments * samplesPerSegment;
+    // Convert new spiral points to Bezier segments
+    const newBeziers = pointsToBezierSegments(newPoints);
 
     for (const existing of existingSpirals) {
-        // Use cached sampled points if available, otherwise sample on the fly
-        const sampledExisting = existing.sampledPoints ||
-            (existing.points ? sampleBezierCurve(existing.points, samplesPerSegment) : null);
+        // Use cached Bezier segments if available, otherwise compute
+        const existingBeziers = existing.bezierSegments ||
+            (existing.points ? pointsToBezierSegments(existing.points) : null);
 
-        if (!sampledExisting) continue;
+        if (!existingBeziers) continue;
 
-        // Check new spiral's segments (after skip) against ALL existing segments
-        for (let i = skipNewSegments; i < sampledNew.length - 1; i++) {
-            for (let j = 0; j < sampledExisting.length - 1; j++) {
-                if (segmentsIntersect(
-                    sampledNew[i].x, sampledNew[i].y,
-                    sampledNew[i + 1].x, sampledNew[i + 1].y,
-                    sampledExisting[j].x, sampledExisting[j].y,
-                    sampledExisting[j + 1].x, sampledExisting[j + 1].y
-                )) {
+        // Check new spiral's Bezier segments (after skip) against all existing segments
+        for (let i = skipSegments; i < newBeziers.length; i++) {
+            for (let j = 0; j < existingBeziers.length; j++) {
+                if (bezierCurvesIntersect(newBeziers[i], existingBeziers[j])) {
                     return true;
                 }
             }
@@ -495,9 +616,9 @@ class TreeLayoutEngine {
         };
 
         // Track this spiral for future intersection checks
-        // Cache sampled Bezier points for efficient intersection detection
-        const sampledPoints = sampleBezierCurve(points, 4);
-        this.allSpirals.push({ points, sampledPoints });
+        // Cache Bezier segments for efficient analytical intersection detection
+        const bezierSegments = pointsToBezierSegments(points);
+        this.allSpirals.push({ points, bezierSegments });
 
         // Track occupied regions for space-aware branching
         // Sample more points along the spiral for better coverage
