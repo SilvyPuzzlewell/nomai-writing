@@ -12,6 +12,8 @@ class NomaiCanvas {
         this.transitionProgress = new Map(); // Track color transition progress (id -> progress 0-1)
         this.activeTransition = null; // Currently animating transition { id, animationId }
         this.layoutEngine = null;
+        this.visibleMessageIds = new Set(); // For animated loading
+        this.animationTimeout = null; // For cancelling animation
 
         // Colors
         this.colors = {
@@ -68,8 +70,11 @@ class NomaiCanvas {
      * @param {Function} onLayoutsGenerated - Callback with layouts to save
      */
     setMessages(messages, onLayoutsGenerated = null) {
+        this.cancelAnimation();
         this.rawMessages = messages;
         this.relayout();
+        // Show all messages immediately
+        this.visibleMessageIds = new Set(this.messages.map(m => m.id));
         this.render();
 
         // Check if any messages need their layouts saved
@@ -79,6 +84,97 @@ class NomaiCanvas {
                 onLayoutsGenerated(layoutsToSave);
             }
         }
+    }
+
+    /**
+     * Set messages with animated reveal (one by one).
+     * @param {Array} messages - Messages from API
+     * @param {number} delay - Delay between each message in ms
+     * @param {Function} onLayoutsGenerated - Callback with layouts to save
+     * @param {Function} onComplete - Callback when animation completes
+     */
+    setMessagesAnimated(messages, delay = 300, onLayoutsGenerated = null, onComplete = null) {
+        this.cancelAnimation();
+        this.rawMessages = messages;
+        this.relayout();
+        this.visibleMessageIds = new Set();
+        this.render();
+
+        // Get messages in tree order (parents before children)
+        const orderedMessages = this.getMessagesInTreeOrder();
+
+        let index = 0;
+        const revealNext = () => {
+            if (index < orderedMessages.length) {
+                this.visibleMessageIds.add(orderedMessages[index].id);
+                this.render();
+                index++;
+                this.animationTimeout = setTimeout(revealNext, delay);
+            } else {
+                // Animation complete
+                this.animationTimeout = null;
+                if (onLayoutsGenerated) {
+                    const layoutsToSave = this.getLayoutsToSave();
+                    if (Object.keys(layoutsToSave).length > 0) {
+                        onLayoutsGenerated(layoutsToSave);
+                    }
+                }
+                if (onComplete) onComplete();
+            }
+        };
+
+        revealNext();
+    }
+
+    /**
+     * Get messages ordered by tree traversal (parents before children).
+     */
+    getMessagesInTreeOrder() {
+        const ordered = [];
+        const visited = new Set();
+
+        // Build parent map
+        const childrenMap = new Map();
+        const roots = [];
+        this.messages.forEach(m => {
+            if (m.parent_id === null) {
+                roots.push(m);
+            } else {
+                if (!childrenMap.has(m.parent_id)) {
+                    childrenMap.set(m.parent_id, []);
+                }
+                childrenMap.get(m.parent_id).push(m);
+            }
+        });
+
+        // DFS traversal
+        const traverse = (node) => {
+            if (visited.has(node.id)) return;
+            visited.add(node.id);
+            ordered.push(node);
+            const children = childrenMap.get(node.id) || [];
+            children.forEach(traverse);
+        };
+
+        roots.forEach(traverse);
+        return ordered;
+    }
+
+    /**
+     * Cancel any ongoing animation.
+     */
+    cancelAnimation() {
+        if (this.animationTimeout) {
+            clearTimeout(this.animationTimeout);
+            this.animationTimeout = null;
+        }
+    }
+
+    /**
+     * Check if animation is in progress.
+     */
+    isAnimating() {
+        return this.animationTimeout !== null;
     }
 
     /**
@@ -123,6 +219,8 @@ class NomaiCanvas {
         // Draw all spirals (children start at parent endpoints, no connection lines needed)
         this.messages.forEach(msg => {
             if (!msg.spiralData) return;
+            // Skip if not visible (during animated loading)
+            if (this.visibleMessageIds.size > 0 && !this.visibleMessageIds.has(msg.id)) return;
 
             const isSelected = msg.id === this.selectedId;
             const isHovered = msg.id === this.hoveredId && !isSelected;

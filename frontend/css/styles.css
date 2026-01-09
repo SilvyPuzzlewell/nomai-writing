@@ -302,6 +302,30 @@ select:focus {
     margin-top: 20px;
 }
 
+/* Checkbox label */
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 4px;
+    transition: color 0.2s;
+}
+
+.checkbox-label:hover {
+    color: var(--text-color);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--curve-color);
+    cursor: pointer;
+}
+
 /* Utility */
 .hidden {
     display: none !important;

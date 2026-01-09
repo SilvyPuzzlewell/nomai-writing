@@ -137,10 +137,21 @@ class NomaiApp {
             const thread = await api.getThread(threadId);
             this.currentThreadId = threadId;
             this.canvas.clearTranslated(); // Reset translated state for new thread
-            this.canvas.setMessages(thread.messages, (layouts) => {
-                // Save newly generated layouts to the database
-                this.saveLayouts(threadId, layouts);
-            });
+
+            const animateToggle = document.getElementById('animate-toggle');
+            const shouldAnimate = animateToggle && animateToggle.checked;
+
+            if (shouldAnimate && thread.messages.length > 0) {
+                // Animated loading - messages appear one by one
+                this.canvas.setMessagesAnimated(thread.messages, 300, (layouts) => {
+                    this.saveLayouts(threadId, layouts);
+                });
+            } else {
+                // Instant loading
+                this.canvas.setMessages(thread.messages, (layouts) => {
+                    this.saveLayouts(threadId, layouts);
+                });
+            }
             this.clearSelection();
         } catch (err) {
             console.error('Failed to load thread:', err);
