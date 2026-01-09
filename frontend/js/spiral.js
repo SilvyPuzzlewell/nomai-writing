@@ -322,44 +322,54 @@ class TreeLayoutEngine {
 
     /**
      * Score how "open" a direction is from a given point.
-     * Higher score = more empty space in that direction.
+     * Higher score = more empty space in that direction.* Samples multiple points along the potential path.
      */
     scoreDirection(fromX, fromY, angle, scale) {
-        const sampleDistance = 150 * scale;
-        const sampleX = fromX + Math.cos(angle) * sampleDistance;
-        const sampleY = fromY + Math.sin(angle) * sampleDistance;
+        // Sample multiple points along the direction to better assess openness
+        const sampleDistances = [80 * scale, 150 * scale, 220 * scale];
+        let totalScore = 0;
 
-        // Find minimum distance to any occupied point
-        let minDist = Infinity;
-        for (const pt of this.occupiedPoints) {
-            const d = Math.hypot(sampleX - pt.x, sampleY - pt.y);
-            minDist = Math.min(minDist, d);
+        for (const dist of sampleDistances) {
+            const sampleX = fromX + Math.cos(angle) * dist;
+            const sampleY = fromY + Math.sin(angle) * dist;
+
+            // Find minimum distance to any occupied point
+            let minDist = Infinity;
+            for (const pt of this.occupiedPoints) {
+                const d = Math.hypot(sampleX - pt.x, sampleY - pt.y);
+                minDist = Math.min(minDist, d);
+            }
+
+            // Heavily penalize directions that go off-canvas
+            const margin = 50;
+            if (sampleX < margin || sampleX > this.width - margin ||
+                sampleY < margin || sampleY > this.height - margin) {
+                minDist *= 0.1;
+            }
+
+            totalScore += minDist;
         }
 
-        // Penalize directions that go off-canvas
-        const margin = 50;
-        if (sampleX < margin || sampleX > this.width - margin ||
-            sampleY < margin || sampleY > this.height - margin) {
-            minDist *= 0.3;
-        }
-
-        return minDist;
+        return totalScore;
     }
 
     /**
-     * Select angle from candidates using weighted random (non-deterministic).
+     * Find a good angle from candidates - picks from top scorers with slight randomness.
      */
-    selectWeightedAngle(candidates) {
-        const totalScore = candidates.reduce((sum, c) => sum + c.score, 0);
-        if (totalScore === 0) return candidates[Math.floor(candidates.length / 2)].angle;
+    selectBestAngle(candidates) {
+        if (candidates.length === 0) return 0;
 
-        const r = Math.random();
-        let cumulative = 0;
-        for (const c of candidates) {
-            cumulative += c.score / totalScore;
-            if (r <= cumulative) return c.angle;
-        }
-        return candidates[candidates.length - 1].angle;
+        // Sort by score descending
+        const sorted = [...candidates].sort((a, b) => b.score - a.score);
+
+        // Pick randomly from top 3 candidates (if available)
+        const topN = Math.min(3, sorted.length);
+        const picked = sorted[Math.floor(Math.random() * topN)];
+
+        // Add small random angle perturbation (±15°)
+        const perturbation = (Math.random() - 0.5) * (Math.PI / 6);
+
+        return picked.angle + perturbation;
     }
 
     /**
@@ -490,12 +500,12 @@ class TreeLayoutEngine {
         this.allSpirals.push({ points, sampledPoints });
 
         // Track occupied regions for space-aware branching
-        this.occupiedPoints.push(
-            { x: startX, y: startY },
-            { x: endPoint.x, y: endPoint.y }
-        );
-        const midIdx = Math.floor(points.length / 2);
-        this.occupiedPoints.push({ x: points[midIdx].x, y: points[midIdx].y });
+        // Sample more points along the spiral for better coverage
+        const numOccupiedSamples = 6;
+        for (let i = 0; i <= numOccupiedSamples; i++) {
+            const idx = Math.floor((i / numOccupiedSamples) * (points.length - 1));
+            this.occupiedPoints.push({ x: points[idx].x, y: points[idx].y });
+        }
 
         // Layout children - they branch from various points along this spiral
         if (node.children.length > 0) {
@@ -528,24 +538,18 @@ class TreeLayoutEngine {
                     childAngle = childSavedLayout.startAngle;
                 } else {
                     // Calculate child's starting angle - branch towards unexplored regions
-                    const parentTangent = branchPoint.theta;
-                    const parentCurvature = points.curvature || this.spiralGenerator.baseCurvature;
-                    const outwardDir = parentCurvature > 0 ? -1 : 1;
-                    const baseAngle = parentTangent + outwardDir * Math.PI / 2;
-
-                    // Generate candidate angles and score them by distance to occupied regions
+                    // Test candidates across full circle to find the most open direction
                     const candidates = [];
-                    const numCandidates = 5;
-                    const spreadAngle = Math.PI / 3; // ±60° spread around base
+                    const numCandidates = 12; // Every 30 degrees
 
                     for (let i = 0; i < numCandidates; i++) {
-                        const t = i / (numCandidates - 1);
-                        const candidateAngle = baseAngle + (t - 0.5) * spreadAngle;
+                        const candidateAngle = (i / numCandidates) * 2 * Math.PI;
                         const score = this.scoreDirection(childStartX, childStartY, candidateAngle, scale);
                         candidates.push({ angle: candidateAngle, score });
                     }
 
-                    childAngle = this.selectWeightedAngle(candidates);
+                    // Always pick the most open direction
+                    childAngle = this.selectBestAngle(candidates);
                 }
 
                 // Give each child a portion of the allocated angle for its subtree
