@@ -109,10 +109,10 @@ function splitBezier(p0, cp1, cp2, p1) {
  * @param {Object} curve2 - Second Bezier curve {p0, cp1, cp2, p1}
  * @param {number} depth - Current recursion depth
  * @param {number} maxDepth - Maximum recursion depth (default 16)
- * @param {number} tolerance - Size threshold for convergence (default 0.5 pixels)
+ * @param {number} tolerance - Size threshold for convergence (default 4.0 pixels to account for line width)
  * @returns {boolean} True if curves intersect
  */
-function bezierCurvesIntersect(curve1, curve2, depth = 0, maxDepth = 16, tolerance = 0.5) {
+function bezierCurvesIntersect(curve1, curve2, depth = 0, maxDepth = 16, tolerance = 4.0) {
     // Get bounding boxes
     const box1 = bezierBoundingBox(curve1.p0, curve1.cp1, curve1.cp2, curve1.p1);
     const box2 = bezierBoundingBox(curve2.p0, curve2.cp1, curve2.cp2, curve2.p1);
@@ -422,6 +422,9 @@ class TreeLayoutEngine {
             currentAngle += angleAllocation;
         });
 
+        // DEBUG: Check for pixel coincidence across all spirals
+        debugCheckPixelCoincidence(this.allSpirals);
+
         return Array.from(messageMap.values());
     }
 
@@ -617,8 +620,14 @@ class TreeLayoutEngine {
 
         // Track this spiral for future intersection checks
         // Cache Bezier segments for efficient analytical intersection detection
+        // Include node ID and parent ID for debug coincidence filtering
         const bezierSegments = pointsToBezierSegments(points);
-        this.allSpirals.push({ points, bezierSegments });
+        this.allSpirals.push({
+            points,
+            bezierSegments,
+            nodeId: node.id,
+            parentId: node.parent_id
+        });
 
         // Track occupied regions for space-aware branching
         // Sample more points along the spiral for better coverage
@@ -700,6 +709,129 @@ class TreeLayoutEngine {
     }
 }
 
+/**
+ * DEBUG: Check every pixel of every spiral and log coinciding pixels.
+ * Samples all spiral Bezier curves densely and reports overlaps.
+ * Filters out expected parent-child coincidences at branch points.
+ * Skips first few points of each spiral (start/branch area).
+ */
+function debugCheckPixelCoincidence(spirals) {
+    console.log("=== DEBUG: Checking pixel coincidence across all spirals ===");
+    console.log(`Total spirals to check: ${spirals.length}`);
+
+    // Build nodeId -> spiralIndex map for parent lookup
+    const nodeIdToIndex = new Map();
+    spirals.forEach((spiral, idx) => {
+        if (spiral.nodeId !== undefined) {
+            nodeIdToIndex.set(spiral.nodeId, idx);
+        }
+    });
+
+    // Map: "x,y" -> array of spiral indices that occupy that pixel
+    const pixelMap = new Map();
+
+    // High sample rate to catch all pixels
+    const samplesPerSegment = 20;
+    const skipPoints = 5; // Skip start/branch area
+
+    spirals.forEach((spiral, spiralIndex) => {
+        if (!spiral.points || spiral.points.length < 2) return;
+
+        // Get densely sampled points along the Bezier curve
+        const sampledPoints = sampleBezierCurve(spiral.points, samplesPerSegment);
+
+        console.log(`Spiral ${spiralIndex} (nodeId=${spiral.nodeId}, parentId=${spiral.parentId}): ${sampledPoints.length} sampled points (skipping first ${skipPoints})`);
+
+        // Skip first few points (start/branch area)
+        sampledPoints.slice(skipPoints).forEach((point, pointIndex) => {
+            // Round to pixel coordinates
+            const px = Math.round(point.x);
+            const py = Math.round(point.y);
+            const key = `${px},${py}`;
+
+            // Log every pixel
+            console.log(`  Spiral ${spiralIndex}, point ${pointIndex + skipPoints}: pixel (${px}, ${py})`);
+
+            if (!pixelMap.has(key)) {
+                pixelMap.set(key, []);
+            }
+
+            // Track which spiral owns this pixel (avoid duplicates within same spiral)
+            const owners = pixelMap.get(key);
+            if (!owners.includes(spiralIndex)) {
+                owners.push(spiralIndex);
+            }
+        });
+    });
+
+    // Helper to check if two spirals are parent-child
+    function areParentChild(idx1, idx2) {
+        const s1 = spirals[idx1];
+        const s2 = spirals[idx2];
+        // s1 is parent of s2?
+        if (s2.parentId !== null && nodeIdToIndex.get(s2.parentId) === idx1) return true;
+        // s2 is parent of s1?
+        if (s1.parentId !== null && nodeIdToIndex.get(s1.parentId) === idx2) return true;
+        return false;
+    }
+
+    // Find and report coinciding pixels
+    console.log("\n=== Coinciding pixels (same pixel occupied by multiple spirals) ===");
+    let expectedCoincidenceCount = 0;
+    let unexpectedCoincidenceCount = 0;
+
+    pixelMap.forEach((owners, key) => {
+        if (owners.length > 1) {
+            // Check all pairs of owners
+            for (let i = 0; i < owners.length; i++) {
+                for (let j = i + 1; j < owners.length; j++) {
+                    const idx1 = owners[i];
+                    const idx2 = owners[j];
+                    if (areParentChild(idx1, idx2)) {
+                        expectedCoincidenceCount++;
+                        console.log(`EXPECTED (parent-child) at pixel ${key}: spirals ${idx1} and ${idx2}`);
+                    } else {
+                        unexpectedCoincidenceCount++;
+                        console.log(`*** UNEXPECTED *** at pixel ${key}: spirals ${idx1} (nodeId=${spirals[idx1].nodeId}) and ${idx2} (nodeId=${spirals[idx2].nodeId})`);
+                    }
+                }
+            }
+        }
+    });
+
+    console.log(`\n--- Summary ---`);
+    console.log(`Expected (parent-child) coincidences: ${expectedCoincidenceCount}`);
+    console.log(`UNEXPECTED coincidences: ${unexpectedCoincidenceCount}`);
+
+    if (unexpectedCoincidenceCount === 0) {
+        console.log("All coincidences are at expected parent-child branch points.");
+    } else {
+        console.log(`WARNING: Found ${unexpectedCoincidenceCount} unexpected pixel overlaps between non-related spirals!`);
+    }
+
+    console.log("=== END DEBUG ===\n");
+
+    // Store unexpected pixels globally for visual debugging
+    window.debugUnexpectedPixels = [];
+    pixelMap.forEach((owners, key) => {
+        if (owners.length > 1) {
+            for (let i = 0; i < owners.length; i++) {
+                for (let j = i + 1; j < owners.length; j++) {
+                    if (!areParentChild(owners[i], owners[j])) {
+                        const [x, y] = key.split(',').map(Number);
+                        window.debugUnexpectedPixels.push({ x, y, spirals: [owners[i], owners[j]] });
+                    }
+                }
+            }
+        }
+    });
+
+    console.log(`Stored ${window.debugUnexpectedPixels.length} unexpected pixels in window.debugUnexpectedPixels for visual debug`);
+
+    return unexpectedCoincidenceCount;
+}
+
 // Export for use in other modules
 window.SpiralGenerator = SpiralGenerator;
 window.TreeLayoutEngine = TreeLayoutEngine;
+window.debugCheckPixelCoincidence = debugCheckPixelCoincidence;

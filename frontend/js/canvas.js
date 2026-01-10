@@ -229,6 +229,34 @@ class NomaiCanvas {
 
             this.drawSpiral(msg, { isSelected, isHovered, isTranslated, transitionProgress: progress });
         });
+
+        // DEBUG: Draw unexpected coinciding pixels in red
+        this.drawDebugPixels();
+    }
+
+    /**
+     * Draw debug markers for unexpected pixel coincidences.
+     */
+    drawDebugPixels() {
+        if (!window.debugUnexpectedPixels || window.debugUnexpectedPixels.length === 0) return;
+
+        const ctx = this.ctx;
+        ctx.save();
+
+        window.debugUnexpectedPixels.forEach(pixel => {
+            // Draw a bright red circle at each unexpected coincidence
+            ctx.beginPath();
+            ctx.arc(pixel.x, pixel.y, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.fill();
+
+            // Add a yellow outline for visibility
+            ctx.strokeStyle = '#ffff00';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        });
+
+        ctx.restore();
     }
 
     /**
