@@ -106,19 +106,30 @@ def delete_thread(thread_id):
         conn.execute('DELETE FROM threads WHERE id = ?', (thread_id,))
         return True
 
-def create_message(thread_id, parent_id, writer_name, content):
-    """Create a new message in a thread."""
+def create_message(thread_id, parent_id, writer_name, content, spiral_prefs=None):
+    """Create a new message in a thread.
+
+    spiral_prefs: optional dict with user spiral preferences (branchT, curvatureDir, curvatureTightness)
+    """
+    import json
+
+    # Store spiral preferences as initial layout_data if provided
+    layout_data = None
+    if spiral_prefs:
+        layout_data = json.dumps({'userPrefs': spiral_prefs})
+
     with get_connection() as conn:
         cursor = conn.execute('''
-            INSERT INTO messages (thread_id, parent_id, writer_name, content)
-            VALUES (?, ?, ?, ?)
-        ''', (thread_id, parent_id, writer_name, content))
+            INSERT INTO messages (thread_id, parent_id, writer_name, content, layout_data)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (thread_id, parent_id, writer_name, content, layout_data))
         return {
             'id': cursor.lastrowid,
             'thread_id': thread_id,
             'parent_id': parent_id,
             'writer_name': writer_name,
-            'content': content
+            'content': content,
+            'layout_data': layout_data
         }
 
 def delete_message(message_id):

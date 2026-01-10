@@ -348,3 +348,144 @@ select:focus {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--btn-bg);
 }
+
+/* Spiral Settings */
+.spiral-toggle {
+    width: 100%;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+}
+
+.toggle-arrow {
+    font-size: 10px;
+    transition: transform 0.2s;
+}
+
+.toggle-arrow.expanded {
+    transform: rotate(90deg);
+}
+
+.spiral-settings {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 16px;
+    margin-top: -8px;
+}
+
+.spiral-settings .form-group {
+    margin-bottom: 12px;
+}
+
+.spiral-settings .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.slider-container input[type="range"] {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    background: var(--border-color);
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.slider-container input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--curve-color);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.slider-container input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.slider-container input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--curve-color);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.slider-value {
+    min-width: 50px;
+    text-align: right;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.radio-group {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+    accent-color: var(--curve-color);
+    cursor: pointer;
+}
+
+/* Collision modal */
+.collision-modal-content {
+    max-width: 400px;
+}
+
+.collision-modal-content p {
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+
+/* Drawing mode hint */
+.drawing-hint {
+    color: var(--curve-color);
+    font-style: italic;
+    padding: 8px 12px;
+    background: rgba(0, 217, 255, 0.1);
+    border-radius: 4px;
+    border-left: 3px solid var(--curve-color);
+    transition: all 0.2s;
+}
+
+/* Drawing status indicator on canvas */
+.drawing-status {
+    position: absolute;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: #00ff64;
+    padding: 10px 20px;
+    border-radius: 20px;
+    font-size: 14px;
+    border: 1px solid #00ff64;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+}

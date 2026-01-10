@@ -48,17 +48,28 @@ const api = {
 
     /**
      * Create a new message.
+     * @param {number} threadId - Thread ID
+     * @param {number|null} parentId - Parent message ID (null for root)
+     * @param {string} writerName - Writer name
+     * @param {string} content - Message content
+     * @param {Object|null} spiralPrefs - Optional spiral preferences (branchT, curvatureDir, curvatureTightness)
      */
-    async createMessage(threadId, parentId, writerName, content) {
+    async createMessage(threadId, parentId, writerName, content, spiralPrefs = null) {
+        const body = {
+            thread_id: threadId,
+            parent_id: parentId,
+            writer_name: writerName,
+            content: content
+        };
+
+        if (spiralPrefs) {
+            body.spiral_prefs = spiralPrefs;
+        }
+
         const response = await fetch(`${API_BASE}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                thread_id: threadId,
-                parent_id: parentId,
-                writer_name: writerName,
-                content: content
-            })
+            body: JSON.stringify(body)
         });
         if (!response.ok) throw new Error('Failed to create message');
         return response.json();

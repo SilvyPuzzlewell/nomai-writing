@@ -15,6 +15,12 @@ class NomaiCanvas {
         this.visibleMessageIds = new Set(); // For animated loading
         this.animationTimeout = null; // For cancelling animation
 
+        // Preview spiral for drawing mode
+        this.previewSpiral = null; // { points, bezierPath }
+        this.previewBranchPoint = null; // { x, y } where preview connects to parent
+        this.branchPointMarker = null; // { x, y } for branch point selection mode
+        this.branchPointLabel = null; // Text to show near marker (e.g., "45%")
+
         // Colors
         this.colors = {
             curve: '#00d9ff',
@@ -205,13 +211,151 @@ class NomaiCanvas {
     }
 
     /**
+     * Get collision conflicts detected during layout.
+     * @returns {Array} Array of conflict info objects
+     */
+    getCollisionConflicts() {
+        return this.layoutEngine ? this.layoutEngine.collisionConflicts : [];
+    }
+
+    /**
+     * Set preview spiral for drawing mode.
+     * @param {Object} spiralData - { points, bezierPath } or null to clear
+     * @param {Object} branchPoint - { x, y } where preview connects to parent
+     */
+    setPreviewSpiral(spiralData, branchPoint = null) {
+        this.previewSpiral = spiralData;
+        this.previewBranchPoint = branchPoint;
+        this.render();
+    }
+
+    /**
+     * Clear preview spiral.
+     */
+    clearPreviewSpiral() {
+        this.previewSpiral = null;
+        this.previewBranchPoint = null;
+        this.render();
+    }
+
+    /**
+     * Set branch point marker for selection mode.
+     * @param {Object} point - { x, y } position
+     * @param {number} branchT - 0-1 value for label
+     */
+    setBranchPointMarker(point, branchT) {
+        this.branchPointMarker = point;
+        this.branchPointLabel = `${Math.round(branchT * 100)}%`;
+        this.render();
+    }
+
+    /**
+     * Clear branch point marker.
+     */
+    clearBranchPointMarker() {
+        this.branchPointMarker = null;
+        this.branchPointLabel = null;
+        this.render();
+    }
+
+    /**
+     * Draw the branch point marker (green circle with label).
+     */
+    drawBranchPointMarker() {
+        if (!this.branchPointMarker) return;
+
+        const ctx = this.ctx;
+        ctx.save();
+
+        // Draw glow
+        ctx.shadowColor = 'rgba(0, 255, 100, 0.8)';
+        ctx.shadowBlur = 12;
+
+        // Draw marker circle
+        ctx.beginPath();
+        ctx.arc(this.branchPointMarker.x, this.branchPointMarker.y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = 'rgba(0, 255, 100, 0.6)';
+        ctx.fill();
+        ctx.strokeStyle = '#00ff64';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Draw label
+        if (this.branchPointLabel) {
+            ctx.shadowBlur = 0;
+            ctx.font = 'bold 12px "Segoe UI", sans-serif';
+            ctx.fillStyle = '#00ff64';
+            ctx.textAlign = 'left';
+            ctx.fillText(this.branchPointLabel, this.branchPointMarker.x + 14, this.branchPointMarker.y + 4);
+        }
+
+        ctx.restore();
+    }
+
+    /**
+     * Draw the preview spiral (semi-transparent, dashed).
+     */
+    drawPreviewSpiral() {
+        if (!this.previewSpiral || !this.previewSpiral.bezierPath) return;
+
+        const ctx = this.ctx;
+        const bezierPath = this.previewSpiral.bezierPath;
+
+        ctx.save();
+
+        // Draw glow
+        ctx.shadowColor = 'rgba(0, 217, 255, 0.6)';
+        ctx.shadowBlur = 15;
+        ctx.strokeStyle = 'rgba(0, 217, 255, 0.7)';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([8, 6]); // Dashed line
+
+        ctx.beginPath();
+        if (bezierPath.length > 0) {
+            ctx.moveTo(bezierPath[0].start.x, bezierPath[0].start.y);
+            bezierPath.forEach(seg => {
+                ctx.bezierCurveTo(
+                    seg.cp1.x, seg.cp1.y,
+                    seg.cp2.x, seg.cp2.y,
+                    seg.end.x, seg.end.y
+                );
+            });
+        }
+        ctx.stroke();
+
+        // Draw endpoint marker
+        if (this.previewSpiral.points && this.previewSpiral.points.length > 0) {
+            const lastPoint = this.previewSpiral.points[this.previewSpiral.points.length - 1];
+            ctx.setLineDash([]); // Solid for endpoint
+            ctx.beginPath();
+            ctx.arc(lastPoint.x, lastPoint.y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(0, 217, 255, 0.7)';
+            ctx.fill();
+        }
+
+        // Draw branch point marker
+        if (this.previewBranchPoint) {
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.arc(this.previewBranchPoint.x, this.previewBranchPoint.y, 6, 0, 2 * Math.PI);
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    /**
      * Render all spirals to canvas.
      */
     render() {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.width, this.height);
 
-        if (this.messages.length === 0) {
+        if (this.messages.length === 0 && !this.previewSpiral) {
             this.drawEmptyState();
             return;
         }
@@ -229,6 +373,12 @@ class NomaiCanvas {
 
             this.drawSpiral(msg, { isSelected, isHovered, isTranslated, transitionProgress: progress });
         });
+
+        // Draw branch point marker
+        this.drawBranchPointMarker();
+
+        // Draw preview spiral on top
+        this.drawPreviewSpiral();
 
         // DEBUG: Draw unexpected coinciding pixels in red
         this.drawDebugPixels();

@@ -55,7 +55,8 @@ def create_message():
         thread_id=data['thread_id'],
         parent_id=data.get('parent_id'),
         writer_name=data['writer_name'],
-        content=data['content']
+        content=data['content'],
+        spiral_prefs=data.get('spiral_prefs')
     )
     return jsonify(message), 201
 

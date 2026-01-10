@@ -63,7 +63,38 @@
                         <span id="selected-parent">Root (new branch)</span>
                         <button type="button" id="clear-parent-btn" class="btn-small hidden">Clear</button>
                     </div>
-                    <p class="hint">Select a spiral on the board to branch from it</p>
+                    <p id="drawing-hint" class="hint drawing-hint">Click on a spiral to set branch point, then drag to shape</p>
+                </div>
+                <div class="form-group">
+                    <button type="button" id="spiral-settings-toggle" class="btn-small spiral-toggle">
+                        <span class="toggle-arrow">&#9654;</span> Fine-tune Settings
+                    </button>
+                </div>
+                <div id="spiral-settings" class="spiral-settings hidden">
+                    <div class="form-group" id="branch-point-group">
+                        <label for="branch-point">Branch Point</label>
+                        <div class="slider-container">
+                            <input type="range" id="branch-point" min="25" max="90" value="50">
+                            <span id="branch-point-value" class="slider-value">Auto</span>
+                        </div>
+                        <p class="hint">Where on the parent spiral to attach (25% = near start, 90% = near end)</p>
+                    </div>
+                    <div class="form-group">
+                        <label>Curvature Direction</label>
+                        <div class="radio-group">
+                            <label class="radio-label"><input type="radio" name="curv-dir" value="auto" checked> Auto</label>
+                            <label class="radio-label"><input type="radio" name="curv-dir" value="cw"> Clockwise</label>
+                            <label class="radio-label"><input type="radio" name="curv-dir" value="ccw"> Counter-clockwise</label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="curv-tightness">Curvature Tightness</label>
+                        <div class="slider-container">
+                            <input type="range" id="curv-tightness" min="30" max="100" value="100">
+                            <span id="curv-tightness-value" class="slider-value">Normal</span>
+                        </div>
+                        <p class="hint">How tightly the spiral curls (lower = tighter)</p>
+                    </div>
                 </div>
                 <div class="form-actions">
                     <button type="button" id="cancel-btn" class="btn">Cancel</button>
@@ -90,10 +121,22 @@
         </div>
     </div>
 
-    <script src="js/api.js?v=11"></script>
-    <script src="js/spiral.js?v=11"></script>
-    <script src="js/canvas.js?v=11"></script>
-    <script src="js/interaction.js?v=11"></script>
-    <script src="js/app.js?v=11"></script>
+    <!-- Collision warning modal -->
+    <div id="collision-modal" class="modal hidden">
+        <div class="modal-content collision-modal-content">
+            <h3>Spiral Overlap Detected</h3>
+            <p>Your spiral settings would cause an overlap with an existing spiral. What would you like to do?</p>
+            <div class="form-actions">
+                <button type="button" id="collision-allow-btn" class="btn">Allow Overlap</button>
+                <button type="button" id="collision-adjust-btn" class="btn btn-primary">Auto-adjust</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/api.js?v=14"></script>
+    <script src="js/spiral.js?v=14"></script>
+    <script src="js/canvas.js?v=14"></script>
+    <script src="js/interaction.js?v=14"></script>
+    <script src="js/app.js?v=14"></script>
 </body>
 </html>

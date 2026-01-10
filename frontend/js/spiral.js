@@ -370,6 +370,7 @@ class TreeLayoutEngine {
         this.spiralGenerator = new SpiralGenerator();
         this.occupiedPoints = [];
         this.allSpirals = []; // Track all spirals for intersection detection
+        this.collisionConflicts = []; // Track messages where user prefs caused collisions
     }
 
     /**
@@ -381,6 +382,7 @@ class TreeLayoutEngine {
         // Reset tracking for fresh layout
         this.occupiedPoints = [];
         this.allSpirals = [];
+        this.collisionConflicts = [];
 
         // Build message map and find roots
         const messageMap = new Map();
@@ -499,16 +501,27 @@ class TreeLayoutEngine {
     /**
      * Generate parameter variations for collision avoidance.
      * Returns an array of override objects to try in order.
+     * @param {number} seed - Seed for deterministic randomness
+     * @param {Object} userOverrides - User-specified overrides to respect
      */
-    generateParameterVariations(seed) {
+    generateParameterVariations(seed, userOverrides = {}) {
         const variations = [];
         const [rDir] = seededRandoms(seed, 1);
         const preferredSign = rDir > 0.5 ? 1 : -1;
 
-        // Try different combinations: curvature direction, length, curvature tightness, angle offset
-        const curvatureSigns = [preferredSign, -preferredSign];
+        // Respect user curvature direction if specified, otherwise try both
+        const curvatureSigns = userOverrides.curvatureSign !== undefined
+            ? [userOverrides.curvatureSign]
+            : [preferredSign, -preferredSign];
+
         const lengthScales = [1.0, 0.7, 0.5, 0.35];
-        const curvatureScales = [1.0, 0.6, 0.3];
+
+        // Respect user curvature tightness if specified, otherwise try variations
+        const baseTightness = userOverrides.curvatureScale ?? 1.0;
+        const curvatureScales = userOverrides.curvatureScale !== undefined
+            ? [baseTightness, baseTightness * 0.8, baseTightness * 1.2].filter(s => s >= 0.3 && s <= 1.0)
+            : [1.0, 0.6, 0.3];
+
         // Much wider angle range - full circle coverage
         const angleOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
 
@@ -546,6 +559,7 @@ class TreeLayoutEngine {
 
         // Check for saved layout data
         const savedLayout = node.layout_data ? JSON.parse(node.layout_data) : null;
+        const userPrefs = savedLayout?.userPrefs || {};
 
         if (savedLayout && savedLayout.overrides) {
             // Use saved overrides for deterministic replay
@@ -554,11 +568,24 @@ class TreeLayoutEngine {
                 startX, startY, startAngle, scale, node.id, usedOverrides
             );
         } else {
+            // Apply user preferences to initial overrides
+            const userOverrides = {};
+            const hasUserPrefs = Object.keys(userPrefs).length > 0;
+            if (userPrefs.curvatureDir === 'cw') {
+                userOverrides.curvatureSign = 1;
+            } else if (userPrefs.curvatureDir === 'ccw') {
+                userOverrides.curvatureSign = -1;
+            }
+            if (userPrefs.curvatureTightness !== undefined) {
+                userOverrides.curvatureScale = userPrefs.curvatureTightness;
+            }
+
             // Generate parameter variations for collision avoidance
-            const variations = this.generateParameterVariations(node.id);
+            const variations = this.generateParameterVariations(node.id, userOverrides);
 
             // Try each variation until we find one that doesn't intersect
             let foundNonIntersecting = false;
+            let userPrefsCollided = false;
             for (let attempt = 0; attempt < variations.length; attempt++) {
                 const overrides = variations[attempt];
 
@@ -571,18 +598,34 @@ class TreeLayoutEngine {
                 if (!intersects) {
                     usedOverrides = overrides;
                     foundNonIntersecting = true;
+                    // If this wasn't the first attempt and user had preferences, collision occurred
+                    if (attempt > 0 && hasUserPrefs) {
+                        userPrefsCollided = true;
+                    }
                     break; // Found a non-intersecting configuration
                 }
 
                 // If this is the last attempt, use it anyway (best effort)
                 if (attempt === variations.length - 1) {
                     usedOverrides = overrides;
+                    userPrefsCollided = hasUserPrefs; // User prefs definitely collided
                     console.warn(`Node ${node.id}: Could not find non-intersecting config after ${variations.length} attempts`);
                 }
             }
             if (foundNonIntersecting) {
                 console.log(`Node ${node.id}: Found non-intersecting config, allSpirals count: ${this.allSpirals.length}`);
             }
+
+            // Track collision conflict for user notification
+            if (userPrefsCollided) {
+                this.collisionConflicts.push({
+                    nodeId: node.id,
+                    writerName: node.writer_name,
+                    userPrefs: userPrefs,
+                    usedOverrides: usedOverrides
+                });
+            }
+
             // Mark that this node needs its layout saved
             node.needsLayoutSave = true;
         }
@@ -644,12 +687,22 @@ class TreeLayoutEngine {
             // Distribute children along the parent spiral (from 30% to 85% of the way)
             // with some randomness based on child ID
             node.children.forEach((child, index) => {
-                // Base branch point distributed along the spiral
-                const baseT = 0.3 + (index / Math.max(1, numChildren - 1)) * 0.55;
+                // Check for user-specified branch point
+                const childSavedLayout = child.layout_data ? JSON.parse(child.layout_data) : null;
+                const childUserPrefs = childSavedLayout?.userPrefs || {};
 
-                // Add randomness to branch point
-                const [rBranch] = seededRandoms(child.id + 500, 1);
-                const branchT = Math.max(0.25, Math.min(0.9, baseT + (rBranch - 0.5) * 0.15));
+                let branchT;
+                if (childUserPrefs.branchT !== undefined) {
+                    // User specified exact branch point
+                    branchT = childUserPrefs.branchT;
+                } else {
+                    // Base branch point distributed along the spiral
+                    const baseT = 0.3 + (index / Math.max(1, numChildren - 1)) * 0.55;
+
+                    // Add randomness to branch point
+                    const [rBranch] = seededRandoms(child.id + 500, 1);
+                    branchT = Math.max(0.25, Math.min(0.9, baseT + (rBranch - 0.5) * 0.15));
+                }
 
                 // Get the point along parent where child branches
                 const branchIndex = Math.floor(branchT * (points.length - 1));
@@ -659,8 +712,7 @@ class TreeLayoutEngine {
                 const childStartX = branchPoint.x;
                 const childStartY = branchPoint.y;
 
-                // Check for saved child angle
-                const childSavedLayout = child.layout_data ? JSON.parse(child.layout_data) : null;
+                // Check for saved child angle (reuse childSavedLayout from above)
                 let childAngle;
 
                 if (childSavedLayout && childSavedLayout.startAngle !== undefined) {

@@ -8,6 +8,10 @@ class NomaiApp {
         this.currentThreadId = null;
         this.selectedMessage = null;
 
+        // Drawing mode state
+        this.drawnSpiralParams = null; // Stores { branchT, curvatureDir, curvatureTightness, startAngle }
+        this.spiralGenerator = null; // Reusable spiral generator
+
         this.init();
     }
 
@@ -19,12 +23,21 @@ class NomaiApp {
         const canvasEl = document.getElementById('spiral-canvas');
         this.canvas = new NomaiCanvas(canvasEl);
 
+        // Initialize spiral generator for preview
+        this.spiralGenerator = new SpiralGenerator();
+
         // Initialize interaction handler
         this.interaction = new InteractionHandler(this.canvas, {
             onSelect: (msg) => this.handleMessageSelect(msg),
             onHover: (msg) => this.handleMessageHover(msg),
             onMouseDown: (msg) => this.handleMouseDown(msg),
-            onMouseUp: (msg) => this.handleMouseUp(msg)
+            onMouseUp: (msg) => this.handleMouseUp(msg),
+            // Drawing mode callbacks (new flow)
+            onBranchPointMove: (msg, point, branchT) => this.handleBranchPointMove(msg, point, branchT),
+            onBranchPointConfirm: (msg, point, branchT) => this.handleBranchPointConfirm(msg, point, branchT),
+            onSpiralPreview: (branchPt, currentPt, path) => this.handleSpiralPreview(branchPt, currentPt, path),
+            onSpiralConfirm: (data) => this.handleSpiralConfirm(data),
+            onDrawingCancel: () => this.handleDrawingCancel()
         });
 
         // Bind UI events
@@ -100,6 +113,36 @@ class NomaiApp {
         document.getElementById('message-modal').addEventListener('click', (e) => {
             if (e.target.id === 'message-modal') this.hideMessageModal();
         });
+
+        // Collision modal buttons
+        document.getElementById('collision-allow-btn').addEventListener('click', () => {
+            this.handleCollisionAllow();
+        });
+
+        document.getElementById('collision-adjust-btn').addEventListener('click', () => {
+            this.hideCollisionModal();
+        });
+
+        document.getElementById('collision-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'collision-modal') this.hideCollisionModal();
+        });
+
+        // Spiral settings toggle
+        document.getElementById('spiral-settings-toggle').addEventListener('click', () => {
+            this.toggleSpiralSettings();
+        });
+
+        // Branch point slider
+        document.getElementById('branch-point').addEventListener('input', (e) => {
+            e.target.dataset.modified = 'true';
+            this.updateBranchPointLabel(e.target.value);
+        });
+
+        // Curvature tightness slider
+        document.getElementById('curv-tightness').addEventListener('input', (e) => {
+            e.target.dataset.modified = 'true';
+            this.updateTightnessLabel(e.target.value);
+        });
     }
 
     /**
@@ -145,16 +188,319 @@ class NomaiApp {
                 // Animated loading - messages appear one by one
                 this.canvas.setMessagesAnimated(thread.messages, 300, (layouts) => {
                     this.saveLayouts(threadId, layouts);
+                    this.checkForCollisionConflicts();
                 });
             } else {
                 // Instant loading
                 this.canvas.setMessages(thread.messages, (layouts) => {
                     this.saveLayouts(threadId, layouts);
                 });
+                this.checkForCollisionConflicts();
             }
             this.clearSelection();
         } catch (err) {
             console.error('Failed to load thread:', err);
+        }
+    }
+
+    /**
+     * Check for collision conflicts after layout and show warning if needed.
+     */
+    checkForCollisionConflicts() {
+        const conflicts = this.canvas.getCollisionConflicts();
+        if (conflicts.length > 0) {
+            this.pendingCollisionConflicts = conflicts;
+            this.showCollisionModal();
+        }
+    }
+
+    /**
+     * Show collision warning modal.
+     */
+    showCollisionModal() {
+        document.getElementById('collision-modal').classList.remove('hidden');
+    }
+
+    /**
+     * Hide collision warning modal.
+     */
+    hideCollisionModal() {
+        document.getElementById('collision-modal').classList.add('hidden');
+        this.pendingCollisionConflicts = null;
+    }
+
+    /**
+     * Handle user choosing to allow overlap.
+     */
+    handleCollisionAllow() {
+        // For now, just hide the modal - allowing overlap would require
+        // re-rendering without collision avoidance, which is a more complex feature
+        this.hideCollisionModal();
+        // Future enhancement: store allowOverlap flag and re-render
+    }
+
+    // =========================================================================
+    // Drawing Mode Handlers (Canvas-first workflow)
+    // =========================================================================
+
+    /**
+     * Handle branch point moving along spiral (during selection).
+     */
+    handleBranchPointMove(parentMessage, point, branchT) {
+        this.canvas.setBranchPointMarker(point, branchT);
+        this.updateStatusIndicator('Move along spiral to select branch point, click to confirm');
+    }
+
+    /**
+     * Handle branch point confirmed - now entering spiral drawing mode.
+     */
+    handleBranchPointConfirm(parentMessage, point, branchT) {
+        this.drawingParentMessage = parentMessage;
+        this.drawingBranchPoint = point;
+        this.drawingBranchT = branchT;
+        this.updateStatusIndicator('Move mouse to shape spiral, click to confirm');
+    }
+
+    /**
+     * Handle spiral preview during drawing.
+     */
+    handleSpiralPreview(branchPoint, currentPoint, gesturePath) {
+        if (!branchPoint) return;
+
+        // Calculate spiral parameters from gesture
+        const params = this.calculateSpiralParamsFromGesture(
+            branchPoint,
+            currentPoint,
+            gesturePath
+        );
+
+        // Get parent's depth for scale calculation
+        const parentDepth = this.drawingParentMessage?.spiralData?.depth || 1;
+        const scale = Math.max(0.4, 1 - parentDepth * 0.15);
+
+        // Generate preview spiral
+        const previewPoints = this.spiralGenerator.generateSpiralPoints(
+            branchPoint.x,
+            branchPoint.y,
+            params.startAngle,
+            scale,
+            Date.now(), // Temporary seed
+            {
+                curvatureSign: params.curvatureDir === 'cw' ? 1 : -1,
+                curvatureScale: params.curvatureTightness
+            }
+        );
+
+        const bezierPath = this.spiralGenerator.pointsToBezierPath(previewPoints);
+
+        // Update canvas preview (clear branch marker, show spiral)
+        this.canvas.clearBranchPointMarker();
+        this.canvas.setPreviewSpiral(
+            { points: previewPoints, bezierPath },
+            branchPoint
+        );
+    }
+
+    /**
+     * Handle spiral confirmed - open modal with parameters.
+     */
+    handleSpiralConfirm(data) {
+        if (!data.branchPoint || data.gesturePath.length < 2) {
+            // Too short gesture - cancel
+            this.handleDrawingCancel();
+            return;
+        }
+
+        const endPoint = data.endPoint || data.gesturePath[data.gesturePath.length - 1];
+
+        // Calculate final parameters
+        const params = this.calculateSpiralParamsFromGesture(
+            data.branchPoint,
+            endPoint,
+            data.gesturePath
+        );
+
+        // Store the drawn parameters
+        this.drawnSpiralParams = {
+            branchT: data.branchT,
+            curvatureDir: params.curvatureDir,
+            curvatureTightness: params.curvatureTightness
+        };
+
+        // Set parent message for the modal
+        this.selectedMessage = data.parentMessage;
+
+        // Clear status indicator
+        this.updateStatusIndicator('');
+
+        // Open the modal with parent pre-selected
+        this.showMessageModalWithDrawnSpiral();
+    }
+
+    /**
+     * Handle drawing cancelled (Escape key or click outside).
+     */
+    handleDrawingCancel() {
+        this.canvas.clearPreviewSpiral();
+        this.canvas.clearBranchPointMarker();
+        this.drawnSpiralParams = null;
+        this.drawingParentMessage = null;
+        this.drawingBranchPoint = null;
+        this.drawingBranchT = null;
+        this.updateStatusIndicator('');
+    }
+
+    /**
+     * Show message modal with pre-drawn spiral.
+     */
+    showMessageModalWithDrawnSpiral() {
+        if (!this.currentThreadId) {
+            alert('Please select or create a thread first');
+            this.handleDrawingCancel();
+            return;
+        }
+
+        document.getElementById('message-modal').classList.remove('hidden');
+        document.getElementById('writer-input').value = '';
+        document.getElementById('content-input').value = '';
+        document.getElementById('writer-input').focus();
+
+        // Update parent selection display
+        this.updateParentSelection(this.selectedMessage);
+
+        // Update sliders to show drawn values
+        this.updateSlidersFromDrawnParams();
+
+        // Update hint to show confirmed values
+        if (this.drawnSpiralParams) {
+            this.updateDrawingHint(
+                `Branch: ${Math.round(this.drawnSpiralParams.branchT * 100)}%, ` +
+                `Direction: ${this.drawnSpiralParams.curvatureDir.toUpperCase()}`
+            );
+        }
+    }
+
+    /**
+     * Calculate spiral parameters from a drag gesture.
+     */
+    calculateSpiralParamsFromGesture(startPoint, endPoint, gesturePath) {
+        // Calculate start angle (direction from branch point to drag end)
+        const startAngle = Math.atan2(
+            endPoint.y - startPoint.y,
+            endPoint.x - startPoint.x
+        );
+
+        // Calculate drag vector
+        const dragVec = {
+            x: endPoint.x - startPoint.x,
+            y: endPoint.y - startPoint.y
+        };
+        const dragLength = Math.hypot(dragVec.x, dragVec.y);
+
+        // Determine curvature direction from gesture path
+        let curvatureDir = 'cw';
+        if (gesturePath.length > 3) {
+            const midIndex = Math.floor(gesturePath.length / 2);
+            const midPoint = gesturePath[midIndex];
+
+            // Cross product to determine which side the midpoint is on
+            const cross = dragVec.x * (midPoint.y - startPoint.y) -
+                          dragVec.y * (midPoint.x - startPoint.x);
+            curvatureDir = cross > 0 ? 'ccw' : 'cw';
+        }
+
+        // Calculate tightness from gesture deviation
+        let maxDeviation = 0;
+        for (const point of gesturePath) {
+            const deviation = this.perpendicularDistance(point, startPoint, endPoint);
+            maxDeviation = Math.max(maxDeviation, deviation);
+        }
+
+        // Normalize: more deviation = tighter curl (lower value)
+        const deviationRatio = maxDeviation / Math.max(dragLength, 50);
+        const curvatureTightness = Math.max(0.3, Math.min(1.0, 1.0 - deviationRatio * 1.5));
+
+        return {
+            startAngle,
+            curvatureDir,
+            curvatureTightness
+        };
+    }
+
+    /**
+     * Calculate perpendicular distance from a point to a line segment.
+     */
+    perpendicularDistance(point, lineStart, lineEnd) {
+        const dx = lineEnd.x - lineStart.x;
+        const dy = lineEnd.y - lineStart.y;
+        const lineLengthSq = dx * dx + dy * dy;
+
+        if (lineLengthSq === 0) {
+            return Math.hypot(point.x - lineStart.x, point.y - lineStart.y);
+        }
+
+        // Project point onto line
+        const t = Math.max(0, Math.min(1,
+            ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / lineLengthSq
+        ));
+
+        const projX = lineStart.x + t * dx;
+        const projY = lineStart.y + t * dy;
+
+        return Math.hypot(point.x - projX, point.y - projY);
+    }
+
+    /**
+     * Update slider UI values from drawn parameters (for display).
+     */
+    updateSlidersFromDrawnParams() {
+        if (!this.drawnSpiralParams) return;
+
+        // Update branch point slider
+        const branchSlider = document.getElementById('branch-point');
+        if (branchSlider) {
+            branchSlider.value = Math.round(this.drawnSpiralParams.branchT * 100);
+            this.updateBranchPointLabel(branchSlider.value);
+        }
+
+        // Update direction radio
+        const dirValue = this.drawnSpiralParams.curvatureDir;
+        const dirRadio = document.querySelector(`input[name="curv-dir"][value="${dirValue}"]`);
+        if (dirRadio) dirRadio.checked = true;
+
+        // Update tightness slider
+        const tightnessSlider = document.getElementById('curv-tightness');
+        if (tightnessSlider) {
+            tightnessSlider.value = Math.round(this.drawnSpiralParams.curvatureTightness * 100);
+            this.updateTightnessLabel(tightnessSlider.value);
+        }
+    }
+
+    /**
+     * Update the drawing hint text in the modal.
+     */
+    updateDrawingHint(text) {
+        const hintEl = document.getElementById('drawing-hint');
+        if (hintEl) {
+            hintEl.textContent = text;
+        }
+    }
+
+    /**
+     * Update status indicator on canvas.
+     */
+    updateStatusIndicator(text) {
+        let indicator = document.getElementById('drawing-status');
+        if (!indicator && text) {
+            // Create indicator if it doesn't exist
+            indicator = document.createElement('div');
+            indicator.id = 'drawing-status';
+            indicator.className = 'drawing-status';
+            document.getElementById('canvas-container').appendChild(indicator);
+        }
+        if (indicator) {
+            indicator.textContent = text;
+            indicator.style.display = text ? 'block' : 'none';
         }
     }
 
@@ -389,6 +735,107 @@ class NomaiApp {
     }
 
     /**
+     * Toggle spiral settings visibility.
+     */
+    toggleSpiralSettings() {
+        const settings = document.getElementById('spiral-settings');
+        const arrow = document.querySelector('.toggle-arrow');
+        settings.classList.toggle('hidden');
+        arrow.classList.toggle('expanded');
+    }
+
+    /**
+     * Reset spiral settings to defaults.
+     */
+    resetSpiralSettings() {
+        // Collapse settings
+        document.getElementById('spiral-settings').classList.add('hidden');
+        document.querySelector('.toggle-arrow').classList.remove('expanded');
+
+        // Reset branch point slider
+        const branchSlider = document.getElementById('branch-point');
+        branchSlider.value = 50;
+        branchSlider.dataset.modified = 'false';
+        document.getElementById('branch-point-value').textContent = 'Auto';
+
+        // Reset curvature direction
+        document.querySelector('input[name="curv-dir"][value="auto"]').checked = true;
+
+        // Reset curvature tightness slider
+        const tightnessSlider = document.getElementById('curv-tightness');
+        tightnessSlider.value = 100;
+        tightnessSlider.dataset.modified = 'false';
+        document.getElementById('curv-tightness-value').textContent = 'Normal';
+    }
+
+    /**
+     * Update branch point label from slider value.
+     */
+    updateBranchPointLabel(value) {
+        document.getElementById('branch-point-value').textContent = `${value}%`;
+    }
+
+    /**
+     * Update curvature tightness label from slider value.
+     */
+    updateTightnessLabel(value) {
+        const label = document.getElementById('curv-tightness-value');
+        if (value <= 50) {
+            label.textContent = 'Tight';
+        } else if (value <= 80) {
+            label.textContent = 'Normal';
+        } else {
+            label.textContent = 'Loose';
+        }
+    }
+
+    /**
+     * Update branch point visibility based on parent selection.
+     */
+    updateBranchPointVisibility() {
+        const branchGroup = document.getElementById('branch-point-group');
+        if (this.selectedMessage) {
+            branchGroup.classList.remove('hidden');
+        } else {
+            branchGroup.classList.add('hidden');
+        }
+    }
+
+    /**
+     * Collect spiral preferences from form inputs or drawn parameters.
+     * @returns {Object|null} Spiral preferences or null if all auto
+     */
+    collectSpiralPreferences() {
+        // If we have drawn parameters, use those
+        if (this.drawnSpiralParams) {
+            return { ...this.drawnSpiralParams };
+        }
+
+        // Otherwise fall back to slider values
+        const prefs = {};
+
+        // Branch point (only if parent selected and user modified)
+        const branchSlider = document.getElementById('branch-point');
+        if (this.selectedMessage && branchSlider.dataset.modified === 'true') {
+            prefs.branchT = parseInt(branchSlider.value) / 100;
+        }
+
+        // Curvature direction
+        const curvDir = document.querySelector('input[name="curv-dir"]:checked').value;
+        if (curvDir !== 'auto') {
+            prefs.curvatureDir = curvDir;
+        }
+
+        // Curvature tightness (only if user modified)
+        const tightnessSlider = document.getElementById('curv-tightness');
+        if (tightnessSlider.dataset.modified === 'true') {
+            prefs.curvatureTightness = parseInt(tightnessSlider.value) / 100;
+        }
+
+        return Object.keys(prefs).length > 0 ? prefs : null;
+    }
+
+    /**
      * Show thread creation modal.
      */
     showThreadModal() {
@@ -425,7 +872,7 @@ class NomaiApp {
     }
 
     /**
-     * Show message creation modal.
+     * Show message creation modal (for + button, no pre-drawn spiral).
      */
     showMessageModal() {
         if (!this.currentThreadId) {
@@ -440,6 +887,18 @@ class NomaiApp {
 
         // Update parent selection display
         this.updateParentSelection(this.selectedMessage);
+
+        // Reset spiral settings to defaults
+        this.resetSpiralSettings();
+
+        // Show/hide branch point based on parent selection
+        this.updateBranchPointVisibility();
+
+        // Clear any drawn params (using sliders instead)
+        this.drawnSpiralParams = null;
+
+        // Update hint
+        this.updateDrawingHint('Use sliders below, or cancel and double-click a spiral to draw');
     }
 
     /**
@@ -447,6 +906,10 @@ class NomaiApp {
      */
     hideMessageModal() {
         document.getElementById('message-modal').classList.add('hidden');
+
+        // Clear preview if any
+        this.canvas.clearPreviewSpiral();
+        this.drawnSpiralParams = null;
     }
 
     /**
@@ -462,9 +925,10 @@ class NomaiApp {
         }
 
         const parentId = this.selectedMessage ? this.selectedMessage.id : null;
+        const spiralPrefs = this.collectSpiralPreferences();
 
         try {
-            await api.createMessage(this.currentThreadId, parentId, writerName, content);
+            await api.createMessage(this.currentThreadId, parentId, writerName, content, spiralPrefs);
             this.hideMessageModal();
             this.clearParentSelection();
             await this.loadThread(this.currentThreadId);
