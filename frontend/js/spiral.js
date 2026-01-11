@@ -277,17 +277,27 @@ class SpiralGenerator {
     generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0, overrides = {}) {
         const points = [];
 
-        // Add randomness based on seed
-        const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
-
         // Apply overrides for collision avoidance
         const lengthScale = overrides.lengthScale ?? 1;
         const curvatureScale = overrides.curvatureScale ?? 1;
         const angleOffset = overrides.angleOffset ?? 0;
 
-        const length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
-        const curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
-        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
+        // If exact params provided (user-drawn spiral), skip randomness for exact match
+        const hasExactParams = overrides.lengthScale !== undefined;
+
+        let length, curvature, curvatureSign;
+        if (hasExactParams) {
+            // Use exact values without randomness
+            length = this.baseLength * scale * lengthScale;
+            curvatureSign = overrides.curvatureSign ?? 1;
+            curvature = this.baseCurvature * curvatureSign * curvatureScale;
+        } else {
+            // Add randomness based on seed
+            const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
+            length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
+            curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
+            curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
+        }
 
         // Apply angle offset
         const adjustedStartAngle = startAngle + angleOffset;
@@ -514,7 +524,10 @@ class TreeLayoutEngine {
             ? [userOverrides.curvatureSign]
             : [preferredSign, -preferredSign];
 
-        const lengthScales = [1.0, 0.7, 0.5, 0.35];
+        // Respect user length scale if specified (from drawn spiral), otherwise try variations
+        const lengthScales = userOverrides.lengthScale !== undefined
+            ? [userOverrides.lengthScale]
+            : [1.0, 0.7, 0.5, 0.35];
 
         // Respect user curvature tightness if specified, otherwise try variations
         const baseTightness = userOverrides.curvatureScale ?? 1.0;
@@ -522,8 +535,12 @@ class TreeLayoutEngine {
             ? [baseTightness, baseTightness * 0.8, baseTightness * 1.2].filter(s => s >= 0.3 && s <= 1.0)
             : [1.0, 0.6, 0.3];
 
-        // Much wider angle range - full circle coverage
-        const angleOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
+        // If user specified exact params (drawn spiral), don't vary angle
+        // Otherwise try wider angle range for collision avoidance
+        const hasExactParams = userOverrides.lengthScale !== undefined;
+        const angleOffsets = hasExactParams
+            ? [0]
+            : [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
 
         // Generate variations - try angle offsets first (most effective for avoiding collisions)
         for (const angleOffset of angleOffsets) {
@@ -562,11 +579,26 @@ class TreeLayoutEngine {
         const userPrefs = savedLayout?.userPrefs || {};
 
         if (savedLayout && savedLayout.overrides) {
-            // Use saved overrides for deterministic replay
+            // Use saved position and overrides for deterministic replay
+            const savedStartX = savedLayout.offsetX !== undefined
+                ? this.centerX + savedLayout.offsetX
+                : startX;
+            const savedStartY = savedLayout.offsetY !== undefined
+                ? this.centerY + savedLayout.offsetY
+                : startY;
+            const savedStartAngle = savedLayout.startAngle !== undefined
+                ? savedLayout.startAngle
+                : startAngle;
+
             usedOverrides = savedLayout.overrides;
             points = this.spiralGenerator.generateSpiralPoints(
-                startX, startY, startAngle, scale, node.id, usedOverrides
+                savedStartX, savedStartY, savedStartAngle, scale, node.id, usedOverrides
             );
+
+            // Update startX/Y/Angle for this node's children to use
+            startX = savedStartX;
+            startY = savedStartY;
+            startAngle = savedStartAngle;
         } else {
             // Apply user preferences to initial overrides
             const userOverrides = {};
@@ -578,6 +610,14 @@ class TreeLayoutEngine {
             }
             if (userPrefs.curvatureTightness !== undefined) {
                 userOverrides.curvatureScale = userPrefs.curvatureTightness;
+            }
+            if (userPrefs.lengthScale !== undefined) {
+                userOverrides.lengthScale = userPrefs.lengthScale;
+            }
+
+            // If user specified exact startAngle, use it directly (from drawn spiral)
+            if (userPrefs.startAngle !== undefined) {
+                startAngle = userPrefs.startAngle;
             }
 
             // Generate parameter variations for collision avoidance

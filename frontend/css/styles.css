@@ -184,6 +184,11 @@ select:focus {
     font-size: 1.2rem;
     color: var(--selected-color);
     font-weight: 500;
+    display: block;
+}
+
+#delete-message-btn {
+    margin-top: 10px;
 }
 
 #message-content {

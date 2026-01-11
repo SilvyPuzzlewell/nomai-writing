@@ -202,6 +202,8 @@ class NomaiCanvas {
         this.messages.forEach(msg => {
             if (msg.needsLayoutSave && msg.spiralData && msg.spiralData.layoutParams) {
                 layouts[msg.id] = JSON.stringify({
+                    offsetX: msg.spiralData.layoutParams.offsetX,
+                    offsetY: msg.spiralData.layoutParams.offsetY,
                     startAngle: msg.spiralData.layoutParams.startAngle,
                     overrides: msg.spiralData.layoutParams.overrides
                 });

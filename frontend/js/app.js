@@ -12,6 +12,9 @@ class NomaiApp {
         this.drawnSpiralParams = null; // Stores { branchT, curvatureDir, curvatureTightness, startAngle }
         this.spiralGenerator = null; // Reusable spiral generator
 
+        // Cache last used writer name
+        this.lastWriterName = '';
+
         this.init();
     }
 
@@ -142,6 +145,11 @@ class NomaiApp {
         document.getElementById('curv-tightness').addEventListener('input', (e) => {
             e.target.dataset.modified = 'true';
             this.updateTightnessLabel(e.target.value);
+        });
+
+        // Delete message button
+        document.getElementById('delete-message-btn').addEventListener('click', () => {
+            this.handleDeleteMessage();
         });
     }
 
@@ -324,6 +332,14 @@ class NomaiApp {
 
         const bezierPath = this.spiralGenerator.pointsToBezierPath(transformedPoints);
 
+        // Store the transform parameters for use when confirming
+        this.lastPreviewTransform = {
+            startAngle: rotation,
+            lengthScale: scale,
+            curvatureSign: curvatureDir,
+            curvatureScale: curvatureScale
+        };
+
         // Update canvas preview
         this.canvas.clearBranchPointMarker();
         this.canvas.setPreviewSpiral(
@@ -347,19 +363,17 @@ class NomaiApp {
             return;
         }
 
-        // Use preview params directly (set by real-time interaction)
-        const previewParams = data.previewParams || {};
-        const curvature = previewParams.curvature ?? 0.5;
-        const curvatureDir = previewParams.curvatureDir ?? 1;
+        // Use the stored transform from the last preview
+        const transform = this.lastPreviewTransform || {};
 
-        // Map curvature to tightness scale (0.3 - 1.0)
-        const curvatureTightness = 0.3 + curvature * 0.7;
-
-        // Store the drawn parameters
+        // Store the drawn parameters including exact transform for layout engine
         this.drawnSpiralParams = {
             branchT: data.branchT,
-            curvatureDir: curvatureDir === 1 ? 'cw' : 'ccw',
-            curvatureTightness: curvatureTightness
+            curvatureDir: transform.curvatureSign === 1 ? 'cw' : 'ccw',
+            curvatureTightness: transform.curvatureScale || 0.65,
+            // These parameters ensure the spiral matches the preview exactly
+            startAngle: transform.startAngle,
+            lengthScale: transform.lengthScale
         };
 
         // Set parent message for the modal
@@ -379,6 +393,7 @@ class NomaiApp {
         this.canvas.clearPreviewSpiral();
         this.canvas.clearBranchPointMarker();
         this.drawnSpiralParams = null;
+        this.lastPreviewTransform = null;
         this.drawingParentMessage = null;
         this.drawingBranchPoint = null;
         this.drawingBranchT = null;
@@ -396,9 +411,9 @@ class NomaiApp {
         }
 
         document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('writer-input').value = '';
+        document.getElementById('writer-input').value = this.lastWriterName;
         document.getElementById('content-input').value = '';
-        document.getElementById('writer-input').focus();
+        document.getElementById('content-input').focus();
 
         // Update parent selection display
         this.updateParentSelection(this.selectedMessage);
@@ -602,6 +617,31 @@ class NomaiApp {
         this.updateParentSelection(message);
         // Show current translation state (don't animate - wait for mouse down)
         this.updateTranslationPanel(message);
+        // Show/hide delete button
+        const deleteBtn = document.getElementById('delete-message-btn');
+        if (message) {
+            deleteBtn.classList.remove('hidden');
+        } else {
+            deleteBtn.classList.add('hidden');
+        }
+    }
+
+    /**
+     * Handle delete message button.
+     */
+    async handleDeleteMessage() {
+        if (!this.selectedMessage) return;
+
+        const msg = this.selectedMessage;
+        if (confirm(`Delete "${msg.writer_name}'s" message? This will also delete all replies.`)) {
+            try {
+                await api.deleteMessage(msg.id);
+                this.clearSelection();
+                await this.loadThread(this.currentThreadId);
+            } catch (err) {
+                console.error('Failed to delete message:', err);
+            }
+        }
     }
 
     /**
@@ -647,6 +687,7 @@ class NomaiApp {
         this.selectedMessage = null;
         this.canvas.setSelected(null);
         this.updateTranslationPanel(null);
+        document.getElementById('delete-message-btn').classList.add('hidden');
     }
 
     /**
@@ -916,9 +957,9 @@ class NomaiApp {
         }
 
         document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('writer-input').value = '';
+        document.getElementById('writer-input').value = this.lastWriterName;
         document.getElementById('content-input').value = '';
-        document.getElementById('writer-input').focus();
+        document.getElementById('content-input').focus();
 
         // Update parent selection display
         this.updateParentSelection(this.selectedMessage);
@@ -945,6 +986,7 @@ class NomaiApp {
         // Clear preview if any
         this.canvas.clearPreviewSpiral();
         this.drawnSpiralParams = null;
+        this.lastPreviewTransform = null;
     }
 
     /**
@@ -958,6 +1000,9 @@ class NomaiApp {
             alert('Please fill in both writer name and content');
             return;
         }
+
+        // Cache writer name for next message
+        this.lastWriterName = writerName;
 
         const parentId = this.selectedMessage ? this.selectedMessage.id : null;
         const spiralPrefs = this.collectSpiralPreferences();
