@@ -1,7 +1,8 @@
 /**
  * API client for backend communication.
+ * Uses relative URL to work in both development and production.
  */
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = '/api';
 
 const api = {
     /**
@@ -110,6 +111,30 @@ const api = {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to clear layouts');
+        return response.json();
+    },
+
+    /**
+     * Export a thread with all messages and layout data.
+     * @param {number} threadId - Thread ID
+     */
+    async exportThread(threadId) {
+        const response = await fetch(`${API_BASE}/threads/${threadId}/export`);
+        if (!response.ok) throw new Error('Failed to export thread');
+        return response.json();
+    },
+
+    /**
+     * Import a thread from JSON data.
+     * @param {Object} data - Thread data with title and messages
+     */
+    async importThread(data) {
+        const response = await fetch(`${API_BASE}/threads/import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (!response.ok) throw new Error('Failed to import thread');
         return response.json();
     }
 };

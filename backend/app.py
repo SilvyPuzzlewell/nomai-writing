@@ -1,8 +1,13 @@
-from flask import Flask, jsonify, request
+import os
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import database
 
-app = Flask(__name__)
+# Determine paths
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BACKEND_DIR, '..', 'frontend')
+
+app = Flask(__name__, static_folder=FRONTEND_DIR)
 CORS(app)
 
 # Initialize database on startup
@@ -83,5 +88,42 @@ def clear_layouts(thread_id):
     database.clear_thread_layouts(thread_id)
     return jsonify({'success': True})
 
+@app.route('/api/threads/<int:thread_id>/export', methods=['GET'])
+def export_thread(thread_id):
+    """Export a thread with all messages and layout data as JSON."""
+    thread = database.get_thread_with_messages(thread_id)
+    if thread is None:
+        return jsonify({'error': 'Thread not found'}), 404
+    return jsonify(thread)
+
+@app.route('/api/threads/import', methods=['POST'])
+def import_thread():
+    """Import a thread from JSON data."""
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': 'Request body is required'}), 400
+
+    if 'title' not in data:
+        return jsonify({'error': 'Thread title is required'}), 400
+
+    try:
+        thread = database.import_thread(data)
+        return jsonify(thread), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+# Serve frontend static files
+@app.route('/')
+def serve_index():
+    """Serve the main index.html."""
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+@app.route('/<path:path>')
+def serve_static(path):
+    """Serve static files (JS, CSS, etc.)."""
+    return send_from_directory(FRONTEND_DIR, path)
+
 if __name__ == '__main__':
+    # Development mode
     app.run(debug=True, port=5000)

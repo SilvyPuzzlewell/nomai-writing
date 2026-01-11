@@ -1,0 +1,34 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local data
+data/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation
+*.md
+CLAUDE.md
+
+# Test files
+tests/
+*_test.py
+
+# Fly.io
+fly.toml
+
+# Misc
+.DS_Store
+*.log

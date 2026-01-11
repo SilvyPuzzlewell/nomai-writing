@@ -2,7 +2,11 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
-DATABASE_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'threads.db')
+# Use environment variable for database path, with fallback to local data directory
+DATABASE_PATH = os.environ.get(
+    'DATABASE_PATH',
+    os.path.join(os.path.dirname(__file__), '..', 'data', 'threads.db')
+)
 
 def init_db():
     """Initialize the database with schema."""
@@ -167,3 +171,57 @@ def clear_thread_layouts(thread_id):
             (thread_id,)
         )
         return True
+
+def import_thread(data):
+    """Import a thread with messages from JSON data.
+
+    data: dict with 'title' and optional 'messages' array
+    Each message should have: writer_name, content, parent_id (can reference old IDs), layout_data
+    """
+    import json
+
+    with get_connection() as conn:
+        # Create the thread
+        cursor = conn.execute(
+            'INSERT INTO threads (title) VALUES (?)',
+            (data['title'],)
+        )
+        thread_id = cursor.lastrowid
+
+        # Import messages if provided
+        messages = data.get('messages', [])
+        if messages:
+            # Build a map from old IDs to new IDs
+            old_to_new_id = {}
+
+            # Sort messages so parents come before children
+            # Messages with null parent_id first, then by original order
+            sorted_messages = sorted(messages, key=lambda m: (m.get('parent_id') is not None, messages.index(m)))
+
+            for msg in sorted_messages:
+                old_id = msg.get('id')
+                old_parent_id = msg.get('parent_id')
+
+                # Map old parent_id to new parent_id
+                new_parent_id = None
+                if old_parent_id is not None:
+                    new_parent_id = old_to_new_id.get(old_parent_id)
+
+                # Insert the message
+                cursor = conn.execute('''
+                    INSERT INTO messages (thread_id, parent_id, writer_name, content, layout_data)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    thread_id,
+                    new_parent_id,
+                    msg.get('writer_name', 'Unknown'),
+                    msg.get('content', ''),
+                    msg.get('layout_data')
+                ))
+
+                # Map old ID to new ID
+                if old_id is not None:
+                    old_to_new_id[old_id] = cursor.lastrowid
+
+        # Return the created thread with messages
+        return get_thread_with_messages(thread_id)

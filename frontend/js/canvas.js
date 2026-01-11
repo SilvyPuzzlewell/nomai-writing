@@ -14,6 +14,9 @@ class NomaiCanvas {
         this.layoutEngine = null;
         this.visibleMessageIds = new Set(); // For animated loading
         this.animationTimeout = null; // For cancelling animation
+        this.revealedIds = new Set(); // Track which messages have been revealed (for progressive reveal)
+        this.useProgressiveReveal = false; // Whether to use progressive reveal mode
+        this.onMessageRevealed = null; // Callback when a message is fully revealed (translated)
 
         // Preview spiral for drawing mode
         this.previewSpiral = null; // { points, bezierPath }
@@ -79,8 +82,10 @@ class NomaiCanvas {
         this.cancelAnimation();
         this.rawMessages = messages;
         this.relayout();
-        // Show all messages immediately
+        // Show all messages immediately (non-progressive mode)
+        this.useProgressiveReveal = false;
         this.visibleMessageIds = new Set(this.messages.map(m => m.id));
+        this.revealedIds = new Set(this.messages.map(m => m.id));
         this.render();
 
         // Check if any messages need their layouts saved
@@ -104,6 +109,7 @@ class NomaiCanvas {
         this.rawMessages = messages;
         this.relayout();
         this.visibleMessageIds = new Set();
+        this.useProgressiveReveal = false;
         this.render();
 
         // Get messages in tree order (parents before children)
@@ -126,6 +132,82 @@ class NomaiCanvas {
                     }
                 }
                 if (onComplete) onComplete();
+            }
+        };
+
+        revealNext();
+    }
+
+    /**
+     * Set messages with progressive reveal - only show roots initially.
+     * Children are revealed when their parent is translated.
+     * @param {Array} messages - Messages from API
+     * @param {Function} onLayoutsGenerated - Callback with layouts to save
+     * @param {Function} onMessageRevealed - Callback when a message finishes translating
+     */
+    setMessagesProgressiveReveal(messages, onLayoutsGenerated = null, onMessageRevealed = null) {
+        this.cancelAnimation();
+        this.rawMessages = messages;
+        this.relayout();
+        this.useProgressiveReveal = true;
+        this.onMessageRevealed = onMessageRevealed;
+
+        // Initially reveal only root messages
+        this.revealedIds = new Set();
+        this.messages.forEach(m => {
+            if (m.parent_id === null) {
+                this.revealedIds.add(m.id);
+            }
+        });
+
+        // Also add already-translated messages and their ancestors to revealed set
+        this.translatedIds.forEach(id => {
+            this.revealedIds.add(id);
+            // Reveal children of translated messages
+            this.messages.forEach(m => {
+                if (m.parent_id === id) {
+                    this.revealedIds.add(m.id);
+                }
+            });
+        });
+
+        // Show all revealed messages
+        this.visibleMessageIds = new Set(this.revealedIds);
+        this.render();
+
+        // Save layouts
+        if (onLayoutsGenerated) {
+            const layoutsToSave = this.getLayoutsToSave();
+            if (Object.keys(layoutsToSave).length > 0) {
+                onLayoutsGenerated(layoutsToSave);
+            }
+        }
+    }
+
+    /**
+     * Reveal children of a message with animation.
+     * @param {number} parentId - ID of the parent message whose children should be revealed
+     * @param {number} delay - Delay between each child in ms
+     */
+    revealChildren(parentId, delay = 200) {
+        // Find direct children of this parent that aren't revealed yet
+        const children = this.messages.filter(m =>
+            m.parent_id === parentId && !this.revealedIds.has(m.id)
+        );
+
+        if (children.length === 0) return;
+
+        let index = 0;
+        const revealNext = () => {
+            if (index < children.length) {
+                const child = children[index];
+                this.revealedIds.add(child.id);
+                this.visibleMessageIds.add(child.id);
+                this.render();
+                index++;
+                this.animationTimeout = setTimeout(revealNext, delay);
+            } else {
+                this.animationTimeout = null;
             }
         };
 
@@ -583,6 +665,16 @@ class NomaiCanvas {
                 this.translatedIds.add(id);
                 this.activeTransition = null;
                 this.render();
+
+                // In progressive reveal mode, reveal children with animation
+                if (this.useProgressiveReveal) {
+                    this.revealChildren(id, 200);
+                }
+
+                // Notify callback
+                if (this.onMessageRevealed) {
+                    this.onMessageRevealed(id);
+                }
             }
         };
 
@@ -619,6 +711,9 @@ class NomaiCanvas {
         this.translatedIds.clear();
         this.transitionProgress.clear();
         this.pauseTransition();
+        this.useProgressiveReveal = false;
+        this.revealedIds.clear();
+        this.onMessageRevealed = null;
     }
 
     /**

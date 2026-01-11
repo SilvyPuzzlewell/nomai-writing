@@ -74,6 +74,21 @@ class NomaiApp {
             this.handleRegenerateLayout();
         });
 
+        // Export button
+        document.getElementById('export-btn').addEventListener('click', () => {
+            this.handleExport();
+        });
+
+        // Import button
+        document.getElementById('import-btn').addEventListener('click', () => {
+            document.getElementById('import-file').click();
+        });
+
+        // Import file input
+        document.getElementById('import-file').addEventListener('change', (e) => {
+            this.handleImport(e);
+        });
+
         // Clear board button
         document.getElementById('clear-thread-btn').addEventListener('click', () => {
             this.handleClearBoard();
@@ -181,7 +196,8 @@ class NomaiApp {
     }
 
     /**
-     * Load a specific thread.
+     * Load a specific thread with progressive reveal.
+     * Only root messages shown initially; children appear when parents are translated.
      */
     async loadThread(threadId) {
         try {
@@ -189,22 +205,12 @@ class NomaiApp {
             this.currentThreadId = threadId;
             this.canvas.clearTranslated(); // Reset translated state for new thread
 
-            const animateToggle = document.getElementById('animate-toggle');
-            const shouldAnimate = animateToggle && animateToggle.checked;
-
-            if (shouldAnimate && thread.messages.length > 0) {
-                // Animated loading - messages appear one by one
-                this.canvas.setMessagesAnimated(thread.messages, 300, (layouts) => {
-                    this.saveLayouts(threadId, layouts);
-                    this.checkForCollisionConflicts();
-                });
-            } else {
-                // Instant loading
-                this.canvas.setMessages(thread.messages, (layouts) => {
-                    this.saveLayouts(threadId, layouts);
-                });
+            // Use progressive reveal - only roots visible initially
+            this.canvas.setMessagesProgressiveReveal(thread.messages, (layouts) => {
+                this.saveLayouts(threadId, layouts);
                 this.checkForCollisionConflicts();
-            }
+            });
+
             this.clearSelection();
         } catch (err) {
             console.error('Failed to load thread:', err);
@@ -286,11 +292,12 @@ class NomaiApp {
         if (targetDist < 20) return;
 
         // Get curvature from preview params (controlled by wheel)
-        const curvature = previewParams.curvature ?? 0.5;
+        const curvature = previewParams.curvature ?? 0.043; // Default ~100°
         const curvatureDir = previewParams.curvatureDir ?? 1;
 
-        // Map curvature (0.1-1.0) to curvatureScale (0.3-1.0)
-        const curvatureScale = 0.3 + curvature * 0.7;
+        // Map curvature (0.1-1.0) to curvatureScale (0.1-1.0)
+        // At 0.1: ~72° curl, at 1.0: 720° curl (full spiral)
+        const curvatureScale = 0.1 + curvature * 0.9;
 
         // Generate a reference spiral at origin pointing right (angle=0)
         // Use a fixed seed for consistent preview shape
@@ -299,7 +306,8 @@ class NomaiApp {
             {
                 curvatureSign: curvatureDir,
                 curvatureScale: curvatureScale,
-                lengthScale: 1.0
+                lengthScale: 1.0,
+                userDrawn: true
             }
         );
 
@@ -337,7 +345,8 @@ class NomaiApp {
             startAngle: rotation,
             lengthScale: scale,
             curvatureSign: curvatureDir,
-            curvatureScale: curvatureScale
+            curvatureScale: curvatureScale,
+            userDrawn: true
         };
 
         // Update canvas preview
@@ -347,10 +356,10 @@ class NomaiApp {
             branchPoint
         );
 
-        // Update status indicator
-        const curvaturePercent = Math.round(curvature * 100);
+        // Update status indicator - show curl in degrees
+        const curlDegrees = Math.round((0.1 + curvature * 0.9) * 720);
         const dirLabel = curvatureDir === 1 ? 'CW' : 'CCW';
-        this.updateStatusIndicator(`Curl: ${curvaturePercent}% ${dirLabel} (scroll to adjust)`);
+        this.updateStatusIndicator(`Curl: ${curlDegrees}° ${dirLabel} (scroll to adjust)`);
     }
 
     /**
@@ -373,7 +382,8 @@ class NomaiApp {
             curvatureTightness: transform.curvatureScale || 0.65,
             // These parameters ensure the spiral matches the preview exactly
             startAngle: transform.startAngle,
-            lengthScale: transform.lengthScale
+            lengthScale: transform.lengthScale,
+            userDrawn: true
         };
 
         // Set parent message for the modal
@@ -607,6 +617,69 @@ class NomaiApp {
         } catch (err) {
             console.error('Failed to regenerate layout:', err);
         }
+    }
+
+    /**
+     * Handle export button - download thread as JSON.
+     */
+    async handleExport() {
+        if (!this.currentThreadId) {
+            alert('Please select a thread to export');
+            return;
+        }
+
+        try {
+            const data = await api.exportThread(this.currentThreadId);
+
+            // Create download
+            const json = JSON.stringify(data, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${data.title.replace(/[^a-z0-9]/gi, '_')}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Failed to export thread:', err);
+            alert('Failed to export thread');
+        }
+    }
+
+    /**
+     * Handle import - read JSON file and create thread.
+     */
+    async handleImport(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+
+            if (!data.title) {
+                alert('Invalid file: missing thread title');
+                return;
+            }
+
+            const thread = await api.importThread(data);
+
+            // Reload threads list and select the imported one
+            await this.loadThreads();
+            document.getElementById('thread-selector').value = thread.id;
+            await this.loadThread(thread.id);
+
+            alert(`Imported thread "${thread.title}" with ${thread.messages?.length || 0} messages.\nOnly root messages shown - translate them to reveal children.`);
+        } catch (err) {
+            console.error('Failed to import thread:', err);
+            alert('Failed to import thread: ' + err.message);
+        }
+
+        // Reset file input
+        event.target.value = '';
     }
 
     /**
