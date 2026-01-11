@@ -1,0 +1,181 @@
+Nomai Thread Viewer - Getting Started Walkthrough
+=================================================
+
+This guide will help you get the app running either locally or on Fly.io.
+
+
+================================================================================
+OPTION 1: RUN LOCALLY
+================================================================================
+
+STEP 1: Clone the Repository
+----------------------------
+git clone https://github.com/SilvyPuzzlewell/nomai-writing.git
+cd nomai-writing
+git checkout painting
+
+STEP 2: Set Up Python Virtual Environment
+-----------------------------------------
+python3 -m venv venv
+source venv/bin/activate
+
+STEP 3: Install Dependencies
+----------------------------
+pip install -r backend/requirements.txt
+
+STEP 4: Create Data Directory
+-----------------------------
+mkdir -p data
+
+STEP 5: Run the App
+-------------------
+./run.sh
+
+Or manually:
+python backend/app.py
+
+STEP 6: Open in Browser
+-----------------------
+Go to: http://localhost:5000
+
+STEP 7: Start Using the App
+---------------------------
+1. Click "New Thread" to create your first thread
+2. Enter a thread title (e.g., "My First Thread")
+3. Click the + button to add a message
+4. Enter a writer name and message content
+5. Click "Add Message"
+6. Hold down on a spiral to "translate" it (reveal the text)
+7. Watch children messages animate in after translating a parent!
+
+
+================================================================================
+OPTION 2: DEPLOY TO FLY.IO (Free Hosting)
+================================================================================
+
+STEP 1: Create a Fly.io Account
+-------------------------------
+Go to https://fly.io and sign up (free tier available)
+
+STEP 2: Install Fly CLI
+-----------------------
+# Linux/Mac:
+curl -L https://fly.io/install.sh | sh
+
+# Or with Homebrew:
+brew install flyctl
+
+STEP 3: Login to Fly
+--------------------
+fly auth login
+
+This will open a browser window to authenticate.
+
+STEP 4: Navigate to Project
+---------------------------
+cd /path/to/nomai-writing
+
+STEP 5: Launch the App
+----------------------
+fly launch --no-deploy
+
+When prompted:
+- Choose a unique app name (or accept the generated one)
+- Select a region close to you (e.g., iad for Virginia, lhr for London)
+- Say NO to setting up databases (we use SQLite)
+
+STEP 6: Create Persistent Storage
+---------------------------------
+fly volumes create nomai_data --size 1 --region <your-region>
+
+Replace <your-region> with your chosen region (e.g., iad)
+
+STEP 7: Deploy
+--------------
+fly deploy
+
+Wait for the deployment to complete (1-2 minutes).
+
+STEP 8: Open Your App
+---------------------
+fly open
+
+Your app is now live on the internet!
+
+
+================================================================================
+USING THE APP
+================================================================================
+
+CREATING THREADS
+----------------
+1. Click "New Thread" button
+2. Enter a title
+3. Click "Create Thread"
+
+ADDING MESSAGES
+---------------
+Method 1 - Quick Add:
+1. Click the + button (bottom right)
+2. Fill in writer name and content
+3. Click "Add Message"
+
+Method 2 - Draw Spiral (Advanced):
+1. Double-click on an existing spiral
+2. Move along the spiral to select branch point, click to confirm
+3. Drag to set direction and length
+4. Scroll wheel to adjust curvature
+5. Click to confirm
+6. Fill in the message details
+
+TRANSLATING MESSAGES
+--------------------
+1. Click and HOLD on a spiral
+2. Watch the text appear progressively
+3. The spiral changes from cyan to grey as you translate
+4. When complete, child messages animate in!
+
+PROGRESSIVE REVEAL
+------------------
+- When you load a thread, only root messages are shown
+- Translate a message to reveal its children
+- This creates an exploration experience like in Outer Wilds!
+
+IMPORT/EXPORT
+-------------
+- Click "Export" to download current thread as JSON
+- Click "Import" to load a previously exported thread
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+"No module named flask"
+-----------------------
+Make sure you activated the virtual environment:
+source venv/bin/activate
+
+"Address already in use"
+------------------------
+Another process is using port 5000. Kill it or use a different port:
+python backend/app.py --port 5001
+
+"Database locked"
+-----------------
+SQLite only allows one writer at a time. Close other connections.
+
+Fly.io: "Volume not found"
+--------------------------
+Create the volume first:
+fly volumes create nomai_data --size 1 --region <region>
+
+Fly.io: "App not responding"
+----------------------------
+Check logs:
+fly logs
+
+Need Help?
+----------
+Check the GitHub issues or create a new one:
+https://github.com/SilvyPuzzlewell/nomai-writing/issues
