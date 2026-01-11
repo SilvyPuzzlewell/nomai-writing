@@ -39,6 +39,10 @@ class InteractionHandler {
         this.branchT = 0;
         this.gesturePath = [];
 
+        // Real-time preview state
+        this.previewCurvature = 0.5; // 0 = loose, 1 = tight
+        this.previewCurvatureDir = 1; // 1 = CW, -1 = CCW
+
         // Double-click detection
         this.lastClickTime = 0;
         this.lastClickPos = null;
@@ -81,6 +85,9 @@ class InteractionHandler {
             const touch = e.touches[0];
             this.handleMouseMove(touch);
         });
+
+        // Mouse wheel for curvature control during spiral drawing
+        canvasEl.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
     }
 
     /**
@@ -269,6 +276,9 @@ class InteractionHandler {
     confirmBranchPoint(coords) {
         this.drawingState = InteractionHandler.STATE_DRAWING_SPIRAL;
         this.gesturePath = [coords];
+        // Reset preview params to defaults
+        this.previewCurvature = 0.5;
+        this.previewCurvatureDir = 1;
         this.onBranchPointConfirm(this.parentMessage, this.branchPoint, this.branchT);
     }
 
@@ -283,7 +293,11 @@ class InteractionHandler {
             branchPoint: this.branchPoint,
             branchT: this.branchT,
             gesturePath: this.gesturePath,
-            endPoint: coords
+            endPoint: coords,
+            previewParams: {
+                curvature: this.previewCurvature,
+                curvatureDir: this.previewCurvatureDir
+            }
         });
 
         // Reset to idle
@@ -346,7 +360,23 @@ class InteractionHandler {
      */
     handleSpiralMove(coords) {
         this.gesturePath.push(coords);
-        this.onSpiralPreview(this.branchPoint, coords, this.gesturePath);
+
+        // Determine curvature direction from gesture path (cross product)
+        if (this.gesturePath.length > 3 && this.branchPoint) {
+            const start = this.branchPoint;
+            const end = coords;
+            const midIndex = Math.floor(this.gesturePath.length / 2);
+            const mid = this.gesturePath[midIndex];
+
+            const dragVec = { x: end.x - start.x, y: end.y - start.y };
+            const cross = dragVec.x * (mid.y - start.y) - dragVec.y * (mid.x - start.x);
+            this.previewCurvatureDir = cross > 0 ? -1 : 1;
+        }
+
+        this.onSpiralPreview(this.branchPoint, coords, this.gesturePath, {
+            curvature: this.previewCurvature,
+            curvatureDir: this.previewCurvatureDir
+        });
         this.canvas.canvas.style.cursor = 'crosshair';
     }
 
@@ -371,6 +401,28 @@ class InteractionHandler {
             this.canvas.setHovered(null);
             this.onHover(null);
         }
+    }
+
+    /**
+     * Handle mouse wheel - adjust curvature during spiral drawing.
+     */
+    handleWheel(event) {
+        if (this.drawingState !== InteractionHandler.STATE_DRAWING_SPIRAL) {
+            return; // Only handle wheel during spiral drawing
+        }
+
+        event.preventDefault();
+
+        // Adjust curvature based on wheel delta
+        const delta = event.deltaY > 0 ? -0.05 : 0.05;
+        this.previewCurvature = Math.max(0.1, Math.min(1.0, this.previewCurvature + delta));
+
+        // Get current mouse position and update preview
+        const coords = this.getCanvasCoords(event);
+        this.onSpiralPreview(this.branchPoint, coords, this.gesturePath, {
+            curvature: this.previewCurvature,
+            curvatureDir: this.previewCurvatureDir
+        });
     }
 
     /**

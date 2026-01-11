@@ -35,7 +35,7 @@ class NomaiApp {
             // Drawing mode callbacks (new flow)
             onBranchPointMove: (msg, point, branchT) => this.handleBranchPointMove(msg, point, branchT),
             onBranchPointConfirm: (msg, point, branchT) => this.handleBranchPointConfirm(msg, point, branchT),
-            onSpiralPreview: (branchPt, currentPt, path) => this.handleSpiralPreview(branchPt, currentPt, path),
+            onSpiralPreview: (branchPt, currentPt, path, previewParams) => this.handleSpiralPreview(branchPt, currentPt, path, previewParams),
             onSpiralConfirm: (data) => this.handleSpiralConfirm(data),
             onDrawingCancel: () => this.handleDrawingCancel()
         });
@@ -258,73 +258,108 @@ class NomaiApp {
         this.drawingParentMessage = parentMessage;
         this.drawingBranchPoint = point;
         this.drawingBranchT = branchT;
-        this.updateStatusIndicator('Move mouse to shape spiral, click to confirm');
+        this.updateStatusIndicator('Drag to set direction & length, scroll to adjust curl, click to confirm');
     }
 
     /**
      * Handle spiral preview during drawing.
+     * Spiral endpoint matches cursor position; mouse wheel controls curvature.
      */
-    handleSpiralPreview(branchPoint, currentPoint, gesturePath) {
+    handleSpiralPreview(branchPoint, currentPoint, gesturePath, previewParams = {}) {
         if (!branchPoint) return;
 
-        // Calculate spiral parameters from gesture
-        const params = this.calculateSpiralParamsFromGesture(
-            branchPoint,
-            currentPoint,
-            gesturePath
-        );
+        // Vector from branch point to cursor (target endpoint)
+        const dx = currentPoint.x - branchPoint.x;
+        const dy = currentPoint.y - branchPoint.y;
+        const targetDist = Math.hypot(dx, dy);
+        const targetAngle = Math.atan2(dy, dx);
 
-        // Get parent's depth for scale calculation
-        const parentDepth = this.drawingParentMessage?.spiralData?.depth || 1;
-        const scale = Math.max(0.4, 1 - parentDepth * 0.15);
+        // Skip if cursor too close to branch point
+        if (targetDist < 20) return;
 
-        // Generate preview spiral
-        const previewPoints = this.spiralGenerator.generateSpiralPoints(
-            branchPoint.x,
-            branchPoint.y,
-            params.startAngle,
-            scale,
-            Date.now(), // Temporary seed
+        // Get curvature from preview params (controlled by wheel)
+        const curvature = previewParams.curvature ?? 0.5;
+        const curvatureDir = previewParams.curvatureDir ?? 1;
+
+        // Map curvature (0.1-1.0) to curvatureScale (0.3-1.0)
+        const curvatureScale = 0.3 + curvature * 0.7;
+
+        // Generate a reference spiral at origin pointing right (angle=0)
+        // Use a fixed seed for consistent preview shape
+        const refPoints = this.spiralGenerator.generateSpiralPoints(
+            0, 0, 0, 1.0, 12345,
             {
-                curvatureSign: params.curvatureDir === 'cw' ? 1 : -1,
-                curvatureScale: params.curvatureTightness
+                curvatureSign: curvatureDir,
+                curvatureScale: curvatureScale,
+                lengthScale: 1.0
             }
         );
 
-        const bezierPath = this.spiralGenerator.pointsToBezierPath(previewPoints);
+        // Get endpoint of reference spiral
+        const refEnd = refPoints[refPoints.length - 1];
+        const refDist = Math.hypot(refEnd.x, refEnd.y);
+        const refAngle = Math.atan2(refEnd.y, refEnd.x);
 
-        // Update canvas preview (clear branch marker, show spiral)
+        // Safety check
+        if (refDist < 1) return;
+
+        // Calculate scale and rotation to map reference endpoint to cursor
+        const scale = targetDist / refDist;
+        const rotation = targetAngle - refAngle;
+
+        // Transform all points: scale, rotate, translate to branch point
+        const cosR = Math.cos(rotation);
+        const sinR = Math.sin(rotation);
+
+        const transformedPoints = refPoints.map(p => {
+            const sx = p.x * scale;
+            const sy = p.y * scale;
+            return {
+                x: branchPoint.x + sx * cosR - sy * sinR,
+                y: branchPoint.y + sx * sinR + sy * cosR,
+                theta: p.theta + rotation,
+                progress: p.progress
+            };
+        });
+
+        const bezierPath = this.spiralGenerator.pointsToBezierPath(transformedPoints);
+
+        // Update canvas preview
         this.canvas.clearBranchPointMarker();
         this.canvas.setPreviewSpiral(
-            { points: previewPoints, bezierPath },
+            { points: transformedPoints, bezierPath },
             branchPoint
         );
+
+        // Update status indicator
+        const curvaturePercent = Math.round(curvature * 100);
+        const dirLabel = curvatureDir === 1 ? 'CW' : 'CCW';
+        this.updateStatusIndicator(`Curl: ${curvaturePercent}% ${dirLabel} (scroll to adjust)`);
     }
 
     /**
      * Handle spiral confirmed - open modal with parameters.
      */
     handleSpiralConfirm(data) {
-        if (!data.branchPoint || data.gesturePath.length < 2) {
-            // Too short gesture - cancel
+        if (!data.branchPoint) {
+            // No branch point - cancel
             this.handleDrawingCancel();
             return;
         }
 
-        const endPoint = data.endPoint || data.gesturePath[data.gesturePath.length - 1];
+        // Use preview params directly (set by real-time interaction)
+        const previewParams = data.previewParams || {};
+        const curvature = previewParams.curvature ?? 0.5;
+        const curvatureDir = previewParams.curvatureDir ?? 1;
 
-        // Calculate final parameters
-        const params = this.calculateSpiralParamsFromGesture(
-            data.branchPoint,
-            endPoint,
-            data.gesturePath
-        );
+        // Map curvature to tightness scale (0.3 - 1.0)
+        const curvatureTightness = 0.3 + curvature * 0.7;
 
         // Store the drawn parameters
         this.drawnSpiralParams = {
             branchT: data.branchT,
-            curvatureDir: params.curvatureDir,
-            curvatureTightness: params.curvatureTightness
+            curvatureDir: curvatureDir === 1 ? 'cw' : 'ccw',
+            curvatureTightness: curvatureTightness
         };
 
         // Set parent message for the modal
@@ -898,7 +933,7 @@ class NomaiApp {
         this.drawnSpiralParams = null;
 
         // Update hint
-        this.updateDrawingHint('Use sliders below, or cancel and double-click a spiral to draw');
+        this.updateDrawingHint('Use sliders below, or cancel and double-click a spiral to draw (drag for length, scroll for curl)');
     }
 
     /**
