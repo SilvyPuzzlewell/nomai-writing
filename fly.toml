@@ -1,11 +1,12 @@
-# Fly.io configuration for Nomai Thread Viewer
-app = 'nomai-threads'
-primary_region = 'iad'
+# fly.toml app configuration file generated for nomai-writing on 2026-01-11T20:58:41Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'nomai-writing'
+primary_region = 'fra'
 
 [build]
-
-[env]
-  DATABASE_PATH = '/data/threads.db'
 
 [http_service]
   internal_port = 8080
@@ -16,10 +17,7 @@ primary_region = 'iad'
   processes = ['app']
 
 [[vm]]
-  memory = '256mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
-
-[mounts]
-  source = 'nomai_data'
-  destination = '/data'
+  memory_mb = 1024
