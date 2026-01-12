@@ -256,7 +256,7 @@ function seededRandoms(seed, count) {
 class SpiralGenerator {
     constructor(options = {}) {
         this.baseLength = options.length || 280;
-        this.baseCurvature = options.curvature || 3.2;  // ~180 degrees of curl
+        this.baseCurvature = options.curvature || (4 * Math.PI);  // Up to 720 degrees of curl
         this.numPoints = options.numPoints || 50;
     }
 
@@ -282,21 +282,23 @@ class SpiralGenerator {
         const curvatureScale = overrides.curvatureScale ?? 1;
         const angleOffset = overrides.angleOffset ?? 0;
 
-        // If exact params provided (user-drawn spiral), skip randomness for exact match
-        const hasExactParams = overrides.lengthScale !== undefined;
+        // User-drawn spirals set this flag explicitly
+        const isUserDrawn = overrides.userDrawn === true;
 
         let length, curvature, curvatureSign;
-        if (hasExactParams) {
-            // Use exact values without randomness
+        if (isUserDrawn) {
+            // Use exact values without randomness for user-drawn spirals
             length = this.baseLength * scale * lengthScale;
             curvatureSign = overrides.curvatureSign ?? 1;
             curvature = this.baseCurvature * curvatureSign * curvatureScale;
         } else {
-            // Add randomness based on seed
+            // Auto-generated spirals: use ~100° base with slight randomness
             const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
             length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
             curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
-            curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
+            // Base of 100° (0.139) with small variation up to ~140° (0.194)
+            const autoScale = 0.139 + rCurve * 0.055;
+            curvature = this.baseCurvature * autoScale * curvatureSign * curvatureScale;
         }
 
         // Apply angle offset
@@ -306,6 +308,12 @@ class SpiralGenerator {
         const dt = 1 / this.numPoints;
         let x = centerX;
         let y = centerY;
+
+        // Calculate spiral tightening factor based on total curvature
+        // More curvature = more tightening to create true spiral effect
+        const totalCurvatureRads = Math.abs(curvature);
+        // Tightening increases with curvature: at 2π (360°), reduce to 30% at end
+        const maxTightening = Math.min(0.85, totalCurvatureRads / (2 * Math.PI) * 0.7);
 
         for (let i = 0; i <= this.numPoints; i++) {
             const t = i / this.numPoints;
@@ -322,9 +330,10 @@ class SpiralGenerator {
             });
 
             // Move along the spiral for next point
-            // Step in the direction of current angle, with step size proportional to length
+            // Decrease step size as we progress to create inward-curling spiral
             if (i < this.numPoints) {
-                const stepSize = length * dt;
+                const tighteningFactor = 1 - t * maxTightening;
+                const stepSize = length * dt * tighteningFactor;
                 x += stepSize * Math.cos(theta);
                 y += stepSize * Math.sin(theta);
             }
@@ -531,14 +540,18 @@ class TreeLayoutEngine {
 
         // Respect user curvature tightness if specified, otherwise try variations
         const baseTightness = userOverrides.curvatureScale ?? 1.0;
-        const curvatureScales = userOverrides.curvatureScale !== undefined
-            ? [baseTightness, baseTightness * 0.8, baseTightness * 1.2].filter(s => s >= 0.3 && s <= 1.0)
+        let curvatureScales = userOverrides.curvatureScale !== undefined
+            ? [baseTightness, baseTightness * 0.8, baseTightness * 1.2].filter(s => s >= 0.1 && s <= 1.5)
             : [1.0, 0.6, 0.3];
+        // Ensure we always have at least one value
+        if (curvatureScales.length === 0) {
+            curvatureScales = [baseTightness];
+        }
 
-        // If user specified exact params (drawn spiral), don't vary angle
+        // If user drew the spiral, don't vary angle
         // Otherwise try wider angle range for collision avoidance
-        const hasExactParams = userOverrides.lengthScale !== undefined;
-        const angleOffsets = hasExactParams
+        const isUserDrawn = userOverrides.userDrawn === true;
+        const angleOffsets = isUserDrawn
             ? [0]
             : [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
 
@@ -551,7 +564,8 @@ class TreeLayoutEngine {
                             curvatureSign,
                             lengthScale,
                             curvatureScale,
-                            angleOffset
+                            angleOffset,
+                            userDrawn: isUserDrawn
                         });
                     }
                 }
@@ -613,6 +627,9 @@ class TreeLayoutEngine {
             }
             if (userPrefs.lengthScale !== undefined) {
                 userOverrides.lengthScale = userPrefs.lengthScale;
+            }
+            if (userPrefs.userDrawn) {
+                userOverrides.userDrawn = true;
             }
 
             // If user specified exact startAngle, use it directly (from drawn spiral)

@@ -40,7 +40,7 @@ class InteractionHandler {
         this.gesturePath = [];
 
         // Real-time preview state
-        this.previewCurvature = 0.5; // 0 = loose, 1 = tight
+        this.previewCurvature = 0.043; // Default ~100°, range: 0 = ~72°, 1.0 = 720°
         this.previewCurvatureDir = 1; // 1 = CW, -1 = CCW
 
         // Double-click detection
@@ -276,8 +276,8 @@ class InteractionHandler {
     confirmBranchPoint(coords) {
         this.drawingState = InteractionHandler.STATE_DRAWING_SPIRAL;
         this.gesturePath = [coords];
-        // Reset preview params to defaults
-        this.previewCurvature = 0.5;
+        // Reset preview params to defaults (~100°)
+        this.previewCurvature = 0.043;
         this.previewCurvatureDir = 1;
         this.onBranchPointConfirm(this.parentMessage, this.branchPoint, this.branchT);
     }
