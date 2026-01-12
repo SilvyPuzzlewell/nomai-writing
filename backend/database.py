@@ -228,5 +228,5 @@ def import_thread(data):
                 if old_id is not None:
                     old_to_new_id[old_id] = cursor.lastrowid
 
-        # Return the created thread with messages
-        return get_thread_with_messages(thread_id)
+    # Return the created thread with messages (after commit)
+    return get_thread_with_messages(thread_id)
