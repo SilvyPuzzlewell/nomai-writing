@@ -582,15 +582,17 @@ class TreeLayoutEngine {
      * If node has saved layout_data, uses those parameters for deterministic replay.
      */
     layoutSubtree(node, startX, startY, startAngle, depth, allocatedAngle, parentSpiralData) {
-        // Scale down spirals for deeper messages
-        const scale = Math.max(0.4, 1 - (depth - 1) * 0.15);
+        // Check for saved layout data first to determine if user-drawn
+        const savedLayout = node.layout_data ? JSON.parse(node.layout_data) : null;
+        const userPrefs = savedLayout?.userPrefs || {};
+
+        // Scale down spirals for deeper messages, but not for user-drawn spirals
+        // User-drawn spirals should maintain their exact drawn size
+        const isUserDrawn = userPrefs.userDrawn === true;
+        const scale = isUserDrawn ? 1.0 : Math.max(0.4, 1 - (depth - 1) * 0.15);
 
         let points = null;
         let usedOverrides = {};
-
-        // Check for saved layout data
-        const savedLayout = node.layout_data ? JSON.parse(node.layout_data) : null;
-        const userPrefs = savedLayout?.userPrefs || {};
 
         if (savedLayout && savedLayout.overrides) {
             // Use saved position and overrides for deterministic replay

@@ -17,6 +17,8 @@ class NomaiCanvas {
         this.revealedIds = new Set(); // Track which messages have been revealed (for progressive reveal)
         this.useProgressiveReveal = false; // Whether to use progressive reveal mode
         this.onMessageRevealed = null; // Callback when a message is fully revealed (translated)
+        this.drawProgress = new Map(); // Track draw animation progress for each spiral (id -> 0-1)
+        this.drawAnimations = new Map(); // Active draw animations (id -> animationId)
 
         // Preview spiral for drawing mode
         this.previewSpiral = null; // { points, bezierPath }
@@ -185,11 +187,11 @@ class NomaiCanvas {
     }
 
     /**
-     * Reveal children of a message with animation.
+     * Reveal children of a message with gradual draw animation.
      * @param {number} parentId - ID of the parent message whose children should be revealed
-     * @param {number} delay - Delay between each child in ms
+     * @param {number} delay - Delay between starting each child's animation in ms
      */
-    revealChildren(parentId, delay = 200) {
+    revealChildren(parentId, delay = 600) {
         // Find direct children of this parent that aren't revealed yet
         const children = this.messages.filter(m =>
             m.parent_id === parentId && !this.revealedIds.has(m.id)
@@ -197,21 +199,55 @@ class NomaiCanvas {
 
         if (children.length === 0) return;
 
+        const drawDuration = 1500; // Time to draw each spiral in ms
+
         let index = 0;
-        const revealNext = () => {
+        const startNextAnimation = () => {
             if (index < children.length) {
                 const child = children[index];
                 this.revealedIds.add(child.id);
                 this.visibleMessageIds.add(child.id);
-                this.render();
+                this.startDrawAnimation(child.id, drawDuration);
                 index++;
-                this.animationTimeout = setTimeout(revealNext, delay);
+                this.animationTimeout = setTimeout(startNextAnimation, delay);
             } else {
                 this.animationTimeout = null;
             }
         };
 
-        revealNext();
+        startNextAnimation();
+    }
+
+    /**
+     * Start a gradual draw animation for a spiral.
+     * @param {number} id - Message ID
+     * @param {number} duration - Animation duration in ms
+     */
+    startDrawAnimation(id, duration = 1500) {
+        // Cancel any existing animation for this id
+        if (this.drawAnimations.has(id)) {
+            cancelAnimationFrame(this.drawAnimations.get(id));
+        }
+
+        this.drawProgress.set(id, 0);
+        const startTime = performance.now();
+
+        const animate = (currentTime) => {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+
+            this.drawProgress.set(id, progress);
+            this.render();
+
+            if (progress < 1) {
+                this.drawAnimations.set(id, requestAnimationFrame(animate));
+            } else {
+                this.drawAnimations.delete(id);
+                this.drawProgress.delete(id); // Fully drawn, no longer needed
+            }
+        };
+
+        this.drawAnimations.set(id, requestAnimationFrame(animate));
     }
 
     /**
@@ -531,6 +567,15 @@ class NomaiCanvas {
 
         if (bezierPath.length === 0) return;
 
+        // Check if this spiral is being animated (gradual draw)
+        const drawProgress = this.drawProgress.get(msg.id);
+        const isDrawing = drawProgress !== undefined && drawProgress < 1;
+        const segmentsToDraw = isDrawing
+            ? Math.ceil(drawProgress * bezierPath.length)
+            : bezierPath.length;
+
+        if (segmentsToDraw === 0) return;
+
         // Determine colors - use transition progress for smooth color change
         let strokeColor, glowColor;
 
@@ -551,6 +596,9 @@ class NomaiCanvas {
             glowColor = this.colors.curveGlow;
         }
 
+        // Get the partial path for drawing animations
+        const pathToDraw = bezierPath.slice(0, segmentsToDraw);
+
         // Draw glow effect for selected/hovered
         if (isSelected || isHovered) {
             ctx.save();
@@ -560,7 +608,7 @@ class NomaiCanvas {
             ctx.lineWidth = isSelected ? 4 : 3;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-            this.drawBezierPath(bezierPath);
+            this.drawBezierPath(pathToDraw);
             ctx.restore();
         }
 
@@ -570,7 +618,7 @@ class NomaiCanvas {
         ctx.lineJoin = 'round';
 
         // Draw curve segments with tapering width
-        for (let i = 0; i < bezierPath.length; i++) {
+        for (let i = 0; i < segmentsToDraw; i++) {
             const seg = bezierPath[i];
             const progress = i / bezierPath.length;
             // Taper from thick to thin
@@ -587,17 +635,20 @@ class NomaiCanvas {
             ctx.stroke();
         }
 
-        // Draw endpoint marker
-        const lastPoint = points[points.length - 1];
+        // Draw endpoint marker at the current drawing position
+        const endpointIndex = isDrawing
+            ? Math.min(Math.floor(drawProgress * (points.length - 1)), points.length - 1)
+            : points.length - 1;
+        const endPoint = points[endpointIndex];
         ctx.beginPath();
-        ctx.arc(lastPoint.x, lastPoint.y, 4 * scale, 0, 2 * Math.PI);
+        ctx.arc(endPoint.x, endPoint.y, 4 * scale, 0, 2 * Math.PI);
         ctx.fillStyle = strokeColor; // Use same color as the spiral
         ctx.fill();
 
         // Add small glow to endpoint if selected or transitioning
         if (isSelected || transitionProgress > 0) {
             ctx.beginPath();
-            ctx.arc(lastPoint.x, lastPoint.y, 6 * scale, 0, 2 * Math.PI);
+            ctx.arc(endPoint.x, endPoint.y, 6 * scale, 0, 2 * Math.PI);
             ctx.fillStyle = glowColor;
             ctx.fill();
         }
@@ -668,7 +719,7 @@ class NomaiCanvas {
 
                 // In progressive reveal mode, reveal children with animation
                 if (this.useProgressiveReveal) {
-                    this.revealChildren(id, 200);
+                    this.revealChildren(id, 600);
                 }
 
                 // Notify callback
@@ -714,6 +765,38 @@ class NomaiCanvas {
         this.useProgressiveReveal = false;
         this.revealedIds.clear();
         this.onMessageRevealed = null;
+        // Clear any active draw animations
+        this.drawAnimations.forEach(animId => cancelAnimationFrame(animId));
+        this.drawAnimations.clear();
+        this.drawProgress.clear();
+    }
+
+    /**
+     * Mark a message as translated (without animation).
+     * @param {number} id - Message ID to mark as translated
+     */
+    markTranslated(id) {
+        this.translatedIds.add(id);
+        this.transitionProgress.set(id, 1);
+    }
+
+    /**
+     * Get all translated message IDs.
+     * @returns {Array} Array of translated message IDs
+     */
+    getTranslatedIds() {
+        return Array.from(this.translatedIds);
+    }
+
+    /**
+     * Restore translated state from saved data.
+     * @param {Array} ids - Array of message IDs to mark as translated
+     */
+    restoreTranslated(ids) {
+        ids.forEach(id => {
+            this.translatedIds.add(id);
+            this.transitionProgress.set(id, 1);
+        });
     }
 
     /**

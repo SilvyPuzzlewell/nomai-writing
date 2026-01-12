@@ -202,13 +202,22 @@ class NomaiApp {
     async loadThread(threadId) {
         try {
             const thread = await api.getThread(threadId);
+
+            // Only clear translation state when switching to a different thread
+            if (this.currentThreadId !== threadId) {
+                this.canvas.clearTranslated();
+                // Restore saved translation state from localStorage
+                this.loadTranslationState(threadId);
+            }
             this.currentThreadId = threadId;
-            this.canvas.clearTranslated(); // Reset translated state for new thread
 
             // Use progressive reveal - only roots visible initially
             this.canvas.setMessagesProgressiveReveal(thread.messages, (layouts) => {
                 this.saveLayouts(threadId, layouts);
                 this.checkForCollisionConflicts();
+            }, (messageId) => {
+                // Called when a message finishes translating - save state
+                this.saveTranslationState();
             });
 
             this.clearSelection();
@@ -1081,10 +1090,17 @@ class NomaiApp {
         const spiralPrefs = this.collectSpiralPreferences();
 
         try {
-            await api.createMessage(this.currentThreadId, parentId, writerName, content, spiralPrefs);
+            const newMessage = await api.createMessage(this.currentThreadId, parentId, writerName, content, spiralPrefs);
             this.hideMessageModal();
             this.clearParentSelection();
+
+            // Mark the new message as already translated (you wrote it, so you know what it says)
+            this.canvas.markTranslated(newMessage.id);
+
             await this.loadThread(this.currentThreadId);
+
+            // Save translation state after reload
+            this.saveTranslationState();
         } catch (err) {
             console.error('Failed to create message:', err);
         }
@@ -1097,6 +1113,32 @@ class NomaiApp {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    /**
+     * Save translation state to localStorage.
+     */
+    saveTranslationState() {
+        if (!this.currentThreadId) return;
+        const key = `nomai_translated_${this.currentThreadId}`;
+        const ids = this.canvas.getTranslatedIds();
+        localStorage.setItem(key, JSON.stringify(ids));
+    }
+
+    /**
+     * Load translation state from localStorage.
+     */
+    loadTranslationState(threadId) {
+        const key = `nomai_translated_${threadId}`;
+        const stored = localStorage.getItem(key);
+        if (stored) {
+            try {
+                const ids = JSON.parse(stored);
+                this.canvas.restoreTranslated(ids);
+            } catch (e) {
+                console.error('Failed to parse translation state:', e);
+            }
+        }
     }
 }
 
