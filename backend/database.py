@@ -10,6 +10,11 @@ DATABASE_PATH = os.environ.get(
 
 def init_db():
     """Initialize the database with schema."""
+    # Ensure database directory exists
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     with get_connection() as conn:
         conn.executescript('''
             CREATE TABLE IF NOT EXISTS threads (

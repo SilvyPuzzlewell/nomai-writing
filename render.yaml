@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: nomai-thread-viewer
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt && mkdir -p data
+    startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.4"
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/threads.db
