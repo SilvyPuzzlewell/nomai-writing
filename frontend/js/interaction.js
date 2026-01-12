@@ -145,7 +145,7 @@ class InteractionHandler {
 
         return {
             point: closestPoint,
-            branchT: Math.max(0.25, Math.min(0.9, closestT)),
+            branchT: closestT,
             distance: closestDist
         };
     }
@@ -167,7 +167,7 @@ class InteractionHandler {
                     bestResult = {
                         message: msg,
                         point: { x: point.x, y: point.y },
-                        branchT: Math.max(0.25, Math.min(0.9, point.progress))
+                        branchT: point.progress
                     };
                 }
             }
