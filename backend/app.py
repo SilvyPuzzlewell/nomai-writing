@@ -1,7 +1,12 @@
 import os
+import logging
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import database
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Determine paths
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -10,14 +15,27 @@ FRONTEND_DIR = os.path.join(BACKEND_DIR, '..', 'frontend')
 app = Flask(__name__, static_folder=FRONTEND_DIR)
 CORS(app)
 
+# Log database configuration
+logger.info(f"TURSO_DATABASE_URL set: {bool(os.environ.get('TURSO_DATABASE_URL'))}")
+logger.info(f"TURSO_AUTH_TOKEN set: {bool(os.environ.get('TURSO_AUTH_TOKEN'))}")
+if os.environ.get('TURSO_DATABASE_URL'):
+    logger.info(f"Using Turso: {os.environ.get('TURSO_DATABASE_URL')[:50]}...")
+
 # Initialize database on startup
+logger.info("Initializing database...")
 database.init_db()
+logger.info("Database initialized")
 
 @app.route('/api/threads', methods=['GET'])
 def get_threads():
     """List all threads."""
-    threads = database.get_all_threads()
-    return jsonify(threads)
+    try:
+        threads = database.get_all_threads()
+        logger.info(f"GET /api/threads returning {len(threads)} threads")
+        return jsonify(threads)
+    except Exception as e:
+        logger.error(f"Error getting threads: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/threads/<int:thread_id>', methods=['GET'])
 def get_thread(thread_id):
@@ -123,6 +141,17 @@ def serve_index():
 def serve_static(path):
     """Serve static files (JS, CSS, etc.)."""
     return send_from_directory(FRONTEND_DIR, path)
+
+@app.route('/api/debug', methods=['GET'])
+def debug_info():
+    """Debug endpoint to check configuration."""
+    return jsonify({
+        'turso_url_set': bool(os.environ.get('TURSO_DATABASE_URL')),
+        'turso_token_set': bool(os.environ.get('TURSO_AUTH_TOKEN')),
+        'turso_url_prefix': os.environ.get('TURSO_DATABASE_URL', '')[:30] + '...' if os.environ.get('TURSO_DATABASE_URL') else None,
+        'database_path': os.environ.get('DATABASE_PATH'),
+        'using_turso': bool(database.TURSO_DATABASE_URL)
+    })
 
 if __name__ == '__main__':
     # Development mode

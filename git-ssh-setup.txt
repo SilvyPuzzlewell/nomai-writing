@@ -1,0 +1,29 @@
+Switching GitHub remote from HTTPS to SSH
+=========================================
+
+Problem: git push asks for username/password when using HTTPS URL
+
+Solution: Change remote URL to SSH format
+
+1. Check current remote URL:
+   git remote -v
+
+   If it shows HTTPS:
+   origin  https://github.com/USERNAME/REPO.git (fetch)
+   origin  https://github.com/USERNAME/REPO.git (push)
+
+2. Switch to SSH URL:
+   git remote set-url origin git@github.com:USERNAME/REPO.git
+
+3. Verify the change:
+   git remote -v
+
+   Should now show:
+   origin  git@github.com:USERNAME/REPO.git (fetch)
+   origin  git@github.com:USERNAME/REPO.git (push)
+
+4. Push using SSH:
+   git push -u origin main
+
+Note: This requires an SSH key already added to your GitHub account.
+To check if SSH is working: ssh -T git@github.com
