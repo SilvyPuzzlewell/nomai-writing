@@ -50,8 +50,20 @@ def init_db():
         # Add layout_data column if it doesn't exist (migration for existing DBs)
         try:
             conn.execute('ALTER TABLE messages ADD COLUMN layout_data TEXT')
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, ValueError):
             pass  # Column already exists
+
+def rows_to_dicts(columns, rows):
+    """Convert rows to list of dicts using column names."""
+    if not rows:
+        return []
+    return [dict(zip(columns, row)) for row in rows]
+
+def row_to_dict(columns, row):
+    """Convert a single row to dict using column names."""
+    if not row:
+        return None
+    return dict(zip(columns, row))
 
 @contextmanager
 def get_connection():
@@ -60,8 +72,8 @@ def get_connection():
         conn = libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
     else:
         conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys = ON')
-    conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
@@ -79,7 +91,10 @@ def get_all_threads():
             GROUP BY t.id
             ORDER BY t.created_at DESC
         ''')
-        return [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(['id', 'title', 'created_at', 'message_count'], rows)
+        return [dict(row) for row in rows]
 
 def get_thread_with_messages(thread_id):
     """Get a thread with all its messages."""
@@ -89,9 +104,10 @@ def get_thread_with_messages(thread_id):
             'SELECT id, title, created_at FROM threads WHERE id = ?',
             (thread_id,)
         )
-        thread = cursor.fetchone()
-        if not thread:
+        row = cursor.fetchone()
+        if not row:
             return None
+        thread = row_to_dict(['id', 'title', 'created_at'], row) if TURSO_DATABASE_URL else dict(row)
 
         # Get messages
         cursor = conn.execute('''
@@ -100,7 +116,12 @@ def get_thread_with_messages(thread_id):
             WHERE thread_id = ?
             ORDER BY created_at
         ''', (thread_id,))
-        messages = [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+        msg_cols = ['id', 'thread_id', 'parent_id', 'writer_name', 'content', 'layout_data', 'created_at']
+        if TURSO_DATABASE_URL:
+            messages = rows_to_dicts(msg_cols, rows)
+        else:
+            messages = [dict(row) for row in rows]
 
         return {
             'id': thread['id'],
@@ -117,7 +138,7 @@ def create_thread(title):
             (title,)
         )
         return {
-            'id': cursor.lastrowid,
+            'id': get_last_insert_id(conn, cursor),
             'title': title
         }
 
@@ -145,7 +166,7 @@ def create_message(thread_id, parent_id, writer_name, content, spiral_prefs=None
             VALUES (?, ?, ?, ?, ?)
         ''', (thread_id, parent_id, writer_name, content, layout_data))
         return {
-            'id': cursor.lastrowid,
+            'id': get_last_insert_id(conn, cursor),
             'thread_id': thread_id,
             'parent_id': parent_id,
             'writer_name': writer_name,
@@ -189,6 +210,13 @@ def clear_thread_layouts(thread_id):
         )
         return True
 
+def get_last_insert_id(conn, cursor):
+    """Get last insert ID - works for both sqlite3 and libsql."""
+    if TURSO_DATABASE_URL:
+        result = conn.execute('SELECT last_insert_rowid()').fetchone()
+        return result[0] if result else None
+    return cursor.lastrowid
+
 def import_thread(data):
     """Import a thread with messages from JSON data.
 
@@ -203,7 +231,7 @@ def import_thread(data):
             'INSERT INTO threads (title) VALUES (?)',
             (data['title'],)
         )
-        thread_id = cursor.lastrowid
+        thread_id = get_last_insert_id(conn, cursor)
 
         # Import messages if provided
         messages = data.get('messages', [])
@@ -238,7 +266,7 @@ def import_thread(data):
 
                 # Map old ID to new ID
                 if old_id is not None:
-                    old_to_new_id[old_id] = cursor.lastrowid
+                    old_to_new_id[old_id] = get_last_insert_id(conn, cursor)
 
     # Return the created thread with messages (after commit)
     return get_thread_with_messages(thread_id)
