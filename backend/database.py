@@ -2,18 +2,27 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
+# Turso configuration (remote database)
+TURSO_DATABASE_URL = os.environ.get('TURSO_DATABASE_URL')
+TURSO_AUTH_TOKEN = os.environ.get('TURSO_AUTH_TOKEN')
+
 # Use environment variable for database path, with fallback to local data directory
 DATABASE_PATH = os.environ.get(
     'DATABASE_PATH',
     os.path.join(os.path.dirname(__file__), '..', 'data', 'threads.db')
 )
 
+# Use libsql if Turso is configured
+if TURSO_DATABASE_URL:
+    import libsql_experimental as libsql
+
 def init_db():
     """Initialize the database with schema."""
-    # Ensure database directory exists
-    db_dir = os.path.dirname(DATABASE_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    # Ensure database directory exists (only for local SQLite)
+    if not TURSO_DATABASE_URL:
+        db_dir = os.path.dirname(DATABASE_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
     with get_connection() as conn:
         conn.executescript('''
@@ -47,9 +56,12 @@ def init_db():
 @contextmanager
 def get_connection():
     """Context manager for database connections."""
-    conn = sqlite3.connect(DATABASE_PATH)
+    if TURSO_DATABASE_URL:
+        conn = libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
+    else:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.execute('PRAGMA foreign_keys = ON')
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA foreign_keys = ON')
     try:
         yield conn
         conn.commit()

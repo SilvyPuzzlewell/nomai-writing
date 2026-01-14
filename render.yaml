@@ -2,10 +2,12 @@ services:
   - type: web
     name: nomai-thread-viewer
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt && mkdir -p data
+    buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && gunicorn app:app --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.4"
-      - key: DATABASE_PATH
-        value: /opt/render/project/src/data/threads.db
+      - key: TURSO_DATABASE_URL
+        sync: false  # Set in Render dashboard
+      - key: TURSO_AUTH_TOKEN
+        sync: false  # Set in Render dashboard
