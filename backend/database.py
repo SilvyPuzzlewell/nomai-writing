@@ -12,9 +12,16 @@ DATABASE_PATH = os.environ.get(
     os.path.join(os.path.dirname(__file__), '..', 'data', 'threads.db')
 )
 
-# Use libsql if Turso is configured
-if TURSO_DATABASE_URL:
-    import libsql_experimental as libsql
+# Lazy import of libsql to avoid tokio initialization before gunicorn fork
+_libsql = None
+
+def get_libsql():
+    """Lazily import libsql to avoid fork issues with tokio runtime."""
+    global _libsql
+    if _libsql is None:
+        import libsql_experimental as libsql
+        _libsql = libsql
+    return _libsql
 
 def init_db():
     """Initialize the database with schema."""
@@ -69,6 +76,7 @@ def row_to_dict(columns, row):
 def get_connection():
     """Context manager for database connections."""
     if TURSO_DATABASE_URL:
+        libsql = get_libsql()
         conn = libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN)
     else:
         conn = sqlite3.connect(DATABASE_PATH)

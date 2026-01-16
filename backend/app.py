@@ -21,10 +21,22 @@ logger.info(f"TURSO_AUTH_TOKEN set: {bool(os.environ.get('TURSO_AUTH_TOKEN'))}")
 if os.environ.get('TURSO_DATABASE_URL'):
     logger.info(f"Using Turso: {os.environ.get('TURSO_DATABASE_URL')[:50]}...")
 
-# Initialize database on startup
-logger.info("Initializing database...")
-database.init_db()
-logger.info("Database initialized")
+# Track if database is initialized (lazy init to avoid fork issues with libsql/tokio)
+_db_initialized = False
+
+def ensure_db_initialized():
+    """Initialize database on first use (after gunicorn fork)."""
+    global _db_initialized
+    if not _db_initialized:
+        logger.info("Initializing database...")
+        database.init_db()
+        logger.info("Database initialized")
+        _db_initialized = True
+
+@app.before_request
+def before_request():
+    """Ensure database is initialized before handling requests."""
+    ensure_db_initialized()
 
 @app.route('/api/threads', methods=['GET'])
 def get_threads():
