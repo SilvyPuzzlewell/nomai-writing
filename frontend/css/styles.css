@@ -205,7 +205,7 @@ select:focus {
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    word-break: break-all;
+    word-break: normal;
 }
 
 #message-content .placeholder {

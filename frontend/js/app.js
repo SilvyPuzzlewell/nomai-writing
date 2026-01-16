@@ -739,9 +739,9 @@ class NomaiApp {
     handleMouseDown(message) {
         if (!message) return;
 
-        // Calculate duration based on message length (constant chars per second)
-        const totalChars = message.writer_name.length + message.content.length;
-        const charsPerSecond = 15;
+        // Calculate duration based on content length only (author shown immediately)
+        const totalChars = message.content.length;
+        const charsPerSecond = 25;
         const duration = (totalChars / charsPerSecond) * 1000;
 
         // Start spiral color transition
@@ -782,17 +782,18 @@ class NomaiApp {
         // Cancel any ongoing animation
         this.pauseTextAnimation();
 
-        // Already fully translated - show immediately
+        // Always show author name immediately
+        writerEl.textContent = message.writer_name;
+
+        // Already fully translated - show content immediately
         if (this.canvas.translatedIds.has(message.id)) {
-            writerEl.textContent = message.writer_name;
             contentEl.innerHTML = `<p>${this.escapeHtml(message.content)}</p>`;
             return;
         }
 
-        const writerText = message.writer_name;
         const contentText = message.content;
-        const totalChars = writerText.length + contentText.length;
-        const charsPerSecond = 15; // Constant rate regardless of length
+        const totalChars = contentText.length;
+        const charsPerSecond = 25; // Constant rate regardless of length
         const duration = (totalChars / charsPerSecond) * 1000;
         const startTime = performance.now();
 
@@ -805,15 +806,8 @@ class NomaiApp {
             const progress = Math.min(startProgress + additionalProgress, 1);
             const charsToShow = Math.floor(progress * totalChars);
 
-            // Show writer name first, then content
-            if (charsToShow <= writerText.length) {
-                writerEl.textContent = writerText.slice(0, charsToShow);
-                contentEl.innerHTML = '<p></p>';
-            } else {
-                writerEl.textContent = writerText;
-                const contentChars = charsToShow - writerText.length;
-                contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, contentChars))}</p>`;
-            }
+            // Show content progressively
+            contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, charsToShow))}</p>`;
 
             if (progress < 1) {
                 this.textAnimationId = requestAnimationFrame(animate);
@@ -846,20 +840,18 @@ class NomaiApp {
         this.pauseTextAnimation();
 
         if (message) {
-            const progress = this.canvas.getTransitionProgress(message.id);
-            const writerText = message.writer_name;
-            const contentText = message.content;
-            const totalChars = writerText.length + contentText.length;
-            const charsToShow = Math.floor(progress * totalChars);
+            // Always show author name immediately
+            writerEl.textContent = message.writer_name;
 
-            // Show text up to current progress
-            if (charsToShow <= writerText.length) {
-                writerEl.textContent = writerText.slice(0, charsToShow);
-                contentEl.innerHTML = charsToShow > 0 ? '<p></p>' : '<p class="placeholder">Hold to translate...</p>';
+            const progress = this.canvas.getTransitionProgress(message.id);
+            const contentText = message.content;
+            const charsToShow = Math.floor(progress * contentText.length);
+
+            // Show content up to current progress
+            if (charsToShow === 0) {
+                contentEl.innerHTML = '<p class="placeholder">Hold to translate...</p>';
             } else {
-                writerEl.textContent = writerText;
-                const contentChars = charsToShow - writerText.length;
-                contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, contentChars))}</p>`;
+                contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, charsToShow))}</p>`;
             }
         } else {
             writerEl.textContent = '';
