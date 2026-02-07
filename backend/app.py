@@ -158,7 +158,10 @@ def notify_discord(thread_id):
         req = urllib.request.Request(
             webhook_url,
             data=json.dumps(embed).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
+            headers={
+                'Content-Type': 'application/json',
+                'User-Agent': 'NomaiThreadViewer/1.0',
+            },
             method='POST'
         )
         response = urllib.request.urlopen(req)
