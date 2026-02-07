@@ -1,5 +1,7 @@
 import os
+import json
 import logging
+import urllib.request
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import database
@@ -125,6 +127,39 @@ def export_thread(thread_id):
     if thread is None:
         return jsonify({'error': 'Thread not found'}), 404
     return jsonify(thread)
+
+@app.route('/api/threads/<int:thread_id>/notify-discord', methods=['POST'])
+def notify_discord(thread_id):
+    """Send a Discord notification that a thread was updated."""
+    webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
+    if not webhook_url:
+        return jsonify({'error': 'Discord webhook URL not configured'}), 400
+
+    thread = database.get_thread_with_messages(thread_id)
+    if thread is None:
+        return jsonify({'error': 'Thread not found'}), 404
+
+    message_count = len(thread.get('messages', []))
+    embed = {
+        "embeds": [{
+            "title": thread['title'],
+            "description": f"Thread has been updated ({message_count} messages)",
+            "color": 0x00CCCC
+        }]
+    }
+
+    try:
+        req = urllib.request.Request(
+            webhook_url,
+            data=json.dumps(embed).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        urllib.request.urlopen(req)
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Failed to send Discord notification: {e}")
+        return jsonify({'error': 'Failed to send Discord notification'}), 500
 
 @app.route('/api/threads/import', methods=['POST'])
 def import_thread():

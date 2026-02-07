@@ -128,6 +128,17 @@ const api = {
      * Import a thread from JSON data.
      * @param {Object} data - Thread data with title and messages
      */
+    async notifyDiscord(threadId) {
+        const response = await fetch(`${API_BASE}/threads/${threadId}/notify-discord`, {
+            method: 'POST'
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to notify Discord');
+        }
+        return response.json();
+    },
+
     async importThread(data) {
         const response = await fetch(`${API_BASE}/threads/import`, {
             method: 'POST',

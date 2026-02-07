@@ -84,6 +84,11 @@ class NomaiApp {
             document.getElementById('import-file').click();
         });
 
+        // Notify Discord button
+        document.getElementById('notify-btn').addEventListener('click', () => {
+            this.handleNotifyDiscord();
+        });
+
         // Import file input
         document.getElementById('import-file').addEventListener('change', (e) => {
             this.handleImport(e);
@@ -689,6 +694,23 @@ class NomaiApp {
 
         // Reset file input
         event.target.value = '';
+    }
+
+    /**
+     * Handle notify Discord button.
+     */
+    async handleNotifyDiscord() {
+        if (!this.currentThreadId) {
+            alert('Please select a thread first');
+            return;
+        }
+
+        try {
+            await api.notifyDiscord(this.currentThreadId);
+            alert('Discord notification sent!');
+        } catch (err) {
+            alert('Failed to notify Discord: ' + err.message);
+        }
     }
 
     /**
