@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import urllib.request
+import urllib.error
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import database
@@ -131,12 +132,16 @@ def export_thread(thread_id):
 @app.route('/api/threads/<int:thread_id>/notify-discord', methods=['POST'])
 def notify_discord(thread_id):
     """Send a Discord notification that a thread was updated."""
+    logger.debug(f"Discord notify requested for thread {thread_id}")
+
     webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
     if not webhook_url:
+        logger.warning("DISCORD_WEBHOOK_URL not set in environment")
         return jsonify({'error': 'Discord webhook URL not configured'}), 400
 
     thread = database.get_thread_with_messages(thread_id)
     if thread is None:
+        logger.warning(f"Thread {thread_id} not found for Discord notification")
         return jsonify({'error': 'Thread not found'}), 404
 
     message_count = len(thread.get('messages', []))
@@ -147,6 +152,7 @@ def notify_discord(thread_id):
             "color": 0x00CCCC
         }]
     }
+    logger.debug(f"Sending Discord webhook for thread '{thread['title']}' ({message_count} messages)")
 
     try:
         req = urllib.request.Request(
@@ -155,8 +161,13 @@ def notify_discord(thread_id):
             headers={'Content-Type': 'application/json'},
             method='POST'
         )
-        urllib.request.urlopen(req)
+        response = urllib.request.urlopen(req)
+        logger.info(f"Discord webhook sent successfully (HTTP {response.status}) for thread {thread_id}")
         return jsonify({'success': True})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        logger.error(f"Discord webhook HTTP error {e.code}: {body}")
+        return jsonify({'error': f'Discord returned HTTP {e.code}'}), 502
     except Exception as e:
         logger.error(f"Failed to send Discord notification: {e}")
         return jsonify({'error': 'Failed to send Discord notification'}), 500
