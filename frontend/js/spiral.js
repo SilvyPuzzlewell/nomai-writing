@@ -588,7 +588,9 @@ class TreeLayoutEngine {
 
         // Scale down spirals for deeper messages, but not for user-drawn spirals
         // User-drawn spirals should maintain their exact drawn size
-        const isUserDrawn = userPrefs.userDrawn === true;
+        // Check both userPrefs (initial creation) and saved overrides (after layout save)
+        const isUserDrawn = userPrefs.userDrawn === true ||
+            (savedLayout?.overrides?.userDrawn === true);
         const scale = isUserDrawn ? 1.0 : Math.max(0.4, 1 - (depth - 1) * 0.15);
 
         let points = null;

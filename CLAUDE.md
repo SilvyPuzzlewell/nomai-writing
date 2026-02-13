@@ -22,6 +22,9 @@ pip install -r backend/requirements.txt
 
 # Load sample data
 python backend/load_sample.py
+
+# Run intersection tests
+node test/intersection-unit-test.js
 ```
 
 The app serves at http://localhost:5000 - Flask serves both the API and frontend static files from a single server.
@@ -32,12 +35,12 @@ The app serves at http://localhost:5000 - Flask serves both the API and frontend
 - **app.py**: Flask REST API + static file server. Lazy-initializes the database on first request (avoids gunicorn fork issues with libsql/tokio). All routes under `/api/`.
 - **database.py**: Database layer supporting both local SQLite and remote Turso (libsql). Uses `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` env vars to switch. Turso's libsql is imported lazily to avoid tokio runtime issues before gunicorn fork. Row conversion differs between backends (`sqlite3.Row` vs manual `rows_to_dicts`).
 
-**API endpoints**: CRUD for threads and messages, bulk layout save/clear (`PUT/DELETE /api/threads/<id>/layouts`), thread export/import (`GET /api/threads/<id>/export`, `POST /api/threads/import`).
+**API endpoints**: CRUD for threads and messages, bulk layout save/clear (`PUT/DELETE /api/threads/<id>/layouts`), thread export/import (`GET /api/threads/<id>/export`, `POST /api/threads/import`), Discord notifications (`POST /api/threads/<id>/notify-discord`), debug info (`GET /api/debug`).
 
 **Database schema**: `threads` (id, title, created_at) and `messages` (id, thread_id, parent_id, writer_name, content, layout_data, created_at). Messages form a tree via `parent_id`. The `layout_data` JSON column stores spiral positioning parameters for deterministic replay.
 
 ### Frontend (`frontend/`)
-Vanilla JS with classes exported to `window` (no build step, no module system). Script load order in `index.html` matters: spiral.js -> canvas.js -> interaction.js -> api.js -> app.js.
+Vanilla JS with classes exported to `window` (no build step, no module system). Script load order in `index.html` matters: api.js -> spiral.js -> canvas.js -> interaction.js -> app.js. Scripts use manual cache-busting query params (`?v=16`) — bump the version when changing frontend files for deployed updates.
 
 **Key classes:**
 - **`SpiralGenerator`** (spiral.js): Generates Archimedean spiral points with Catmull-Rom-to-Bezier conversion. Uses seeded RNG (`seededRandom`) for deterministic spiral shapes from message IDs. Supports both auto-generated spirals (~100 degree curl) and user-drawn spirals (exact transform parameters).
@@ -53,4 +56,4 @@ Vanilla JS with classes exported to `window` (no build step, no module system). 
 
 ## Deployment
 
-Deployed on Render (`render.yaml`): gunicorn serves Flask app with 120s timeout. Turso credentials set in Render dashboard. The `.env` file (not committed) holds Turso credentials for local remote-DB testing; see `.env.example`.
+Deployed on Render (`render.yaml`): gunicorn serves Flask app with 120s timeout. Turso credentials and `DISCORD_WEBHOOK_URL` set in Render dashboard. The `.env` file (not committed) holds credentials for local remote-DB testing; see `.env.example`.

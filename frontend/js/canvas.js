@@ -20,6 +20,9 @@ class NomaiCanvas {
         this.drawProgress = new Map(); // Track draw animation progress for each spiral (id -> 0-1)
         this.drawAnimations = new Map(); // Active draw animations (id -> animationId)
 
+        // Layout cache: ensures spirals never change once computed (survives relayout/reload)
+        this.layoutCache = new Map(); // message ID -> layout_data JSON string
+
         // Preview spiral for drawing mode
         this.previewSpiral = null; // { points, bezierPath }
         this.previewBranchPoint = null; // { x, y } where preview connects to parent
@@ -303,12 +306,35 @@ class NomaiCanvas {
 
     /**
      * Recompute layout for current messages.
+     * Applies cached layouts to ensure existing spirals never change position.
      */
     relayout() {
         if (!this.layoutEngine) {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
+
+        // Apply cached layouts to rawMessages so existing spirals stay fixed
+        if (this.rawMessages && this.layoutCache.size > 0) {
+            this.rawMessages.forEach(msg => {
+                if (this.layoutCache.has(msg.id)) {
+                    msg.layout_data = this.layoutCache.get(msg.id);
+                }
+            });
+        }
+
         this.messages = this.layoutEngine.layoutTree(this.rawMessages || []);
+
+        // Cache all computed layouts for future relayouts
+        this.messages.forEach(msg => {
+            if (msg.spiralData && msg.spiralData.layoutParams) {
+                this.layoutCache.set(msg.id, JSON.stringify({
+                    offsetX: msg.spiralData.layoutParams.offsetX,
+                    offsetY: msg.spiralData.layoutParams.offsetY,
+                    startAngle: msg.spiralData.layoutParams.startAngle,
+                    overrides: msg.spiralData.layoutParams.overrides
+                }));
+            }
+        });
     }
 
     /**
@@ -769,6 +795,15 @@ class NomaiCanvas {
         this.drawAnimations.forEach(animId => cancelAnimationFrame(animId));
         this.drawAnimations.clear();
         this.drawProgress.clear();
+        // Clear layout cache when switching threads
+        this.layoutCache.clear();
+    }
+
+    /**
+     * Clear the layout cache (e.g., when regenerating layouts).
+     */
+    clearLayoutCache() {
+        this.layoutCache.clear();
     }
 
     /**

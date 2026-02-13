@@ -626,6 +626,8 @@ class NomaiApp {
         try {
             // Clear saved layouts on server
             await api.clearLayouts(this.currentThreadId);
+            // Clear cached layouts so regeneration computes fresh
+            this.canvas.clearLayoutCache();
             // Reload thread (will regenerate and save new layouts)
             await this.loadThread(this.currentThreadId);
         } catch (err) {
