@@ -11,3 +11,5 @@ services:
         sync: false  # Set in Render dashboard
       - key: TURSO_AUTH_TOKEN
         sync: false  # Set in Render dashboard
+      - key: SECRET_KEY
+        generateValue: true

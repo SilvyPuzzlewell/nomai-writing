@@ -46,8 +46,39 @@ class NomaiApp {
         // Bind UI events
         this.bindUIEvents();
 
+        // Load user info
+        await this.loadUserInfo();
+
         // Load threads
         await this.loadThreads();
+
+        // Auto-select thread from URL param (e.g. after accepting a share invite)
+        const urlParams = new URLSearchParams(window.location.search);
+        const threadParam = urlParams.get('thread');
+        if (threadParam) {
+            const threadId = parseInt(threadParam);
+            if (threadId) {
+                document.getElementById('thread-selector').value = threadId;
+                await this.loadThread(threadId);
+                // Clean URL
+                window.history.replaceState({}, '', '/');
+            }
+        }
+    }
+
+    /**
+     * Load and display current user info.
+     */
+    async loadUserInfo() {
+        try {
+            const user = await api.getMe();
+            if (user) {
+                const usernameEl = document.getElementById('current-username');
+                if (usernameEl) usernameEl.textContent = user.username;
+            }
+        } catch (err) {
+            // Will redirect to login via authFetch 401 handler
+        }
     }
 
     /**
@@ -171,6 +202,38 @@ class NomaiApp {
         document.getElementById('delete-message-btn').addEventListener('click', () => {
             this.handleDeleteMessage();
         });
+
+        // Logout button
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => this.handleLogout());
+        }
+
+        // Share button
+        const shareBtn = document.getElementById('share-btn');
+        if (shareBtn) {
+            shareBtn.addEventListener('click', () => this.showShareModal());
+        }
+
+        // Share modal events
+        const shareModal = document.getElementById('share-modal');
+        if (shareModal) {
+            shareModal.addEventListener('click', (e) => {
+                if (e.target.id === 'share-modal') this.hideShareModal();
+            });
+            document.getElementById('share-close-btn').addEventListener('click', () => {
+                this.hideShareModal();
+            });
+            document.getElementById('share-copy-btn').addEventListener('click', () => {
+                this.copyShareLink();
+            });
+            document.getElementById('share-mode-select').addEventListener('change', (e) => {
+                this.updateShareMode(e.target.value);
+            });
+            document.getElementById('share-revoke-btn').addEventListener('click', () => {
+                this.revokeShare();
+            });
+        }
     }
 
     /**
@@ -1119,6 +1182,69 @@ class NomaiApp {
             this.saveTranslationState();
         } catch (err) {
             console.error('Failed to create message:', err);
+        }
+    }
+
+    // =========================================================================
+    // Auth & Share Handlers
+    // =========================================================================
+
+    async handleLogout() {
+        await api.logout();
+        window.location.href = '/login';
+    }
+
+    async showShareModal() {
+        if (!this.currentThreadId) {
+            alert('Please select a thread first');
+            return;
+        }
+
+        try {
+            const data = await api.shareThread(this.currentThreadId);
+            const url = window.location.origin + data.url;
+
+            document.getElementById('share-link-input').value = url;
+            document.getElementById('share-mode-select').value = data.share_mode;
+            document.getElementById('share-modal').classList.remove('hidden');
+        } catch (err) {
+            console.error('Failed to create share link:', err);
+            alert('Failed to create share link');
+        }
+    }
+
+    hideShareModal() {
+        document.getElementById('share-modal').classList.add('hidden');
+    }
+
+    copyShareLink() {
+        const input = document.getElementById('share-link-input');
+        input.select();
+        navigator.clipboard.writeText(input.value).then(() => {
+            const btn = document.getElementById('share-copy-btn');
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        });
+    }
+
+    async updateShareMode(mode) {
+        if (!this.currentThreadId) return;
+        try {
+            await api.shareThread(this.currentThreadId, mode);
+        } catch (err) {
+            console.error('Failed to update share mode:', err);
+        }
+    }
+
+    async revokeShare() {
+        if (!this.currentThreadId) return;
+        if (!confirm('Revoke this share link? Anyone with the link will lose access.')) return;
+
+        try {
+            await api.unshareThread(this.currentThreadId);
+            this.hideShareModal();
+        } catch (err) {
+            console.error('Failed to revoke share:', err);
         }
     }
 

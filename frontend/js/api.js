@@ -4,12 +4,26 @@
  */
 const API_BASE = '/api';
 
+/**
+ * Wrapper around fetch that handles 401 redirects.
+ */
+async function authFetch(url, options = {}) {
+    const response = await fetch(url, options);
+
+    if (response.status === 401) {
+        window.location.href = '/login';
+        throw new Error('Authentication required');
+    }
+
+    return response;
+}
+
 const api = {
     /**
      * Get all threads.
      */
     async getThreads() {
-        const response = await fetch(`${API_BASE}/threads`);
+        const response = await authFetch(`${API_BASE}/threads`);
         if (!response.ok) throw new Error('Failed to fetch threads');
         return response.json();
     },
@@ -18,7 +32,7 @@ const api = {
      * Get a thread with all its messages.
      */
     async getThread(id) {
-        const response = await fetch(`${API_BASE}/threads/${id}`);
+        const response = await authFetch(`${API_BASE}/threads/${id}`);
         if (!response.ok) throw new Error('Failed to fetch thread');
         return response.json();
     },
@@ -27,7 +41,7 @@ const api = {
      * Create a new thread.
      */
     async createThread(title) {
-        const response = await fetch(`${API_BASE}/threads`, {
+        const response = await authFetch(`${API_BASE}/threads`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title })
@@ -40,7 +54,7 @@ const api = {
      * Delete a thread.
      */
     async deleteThread(id) {
-        const response = await fetch(`${API_BASE}/threads/${id}`, {
+        const response = await authFetch(`${API_BASE}/threads/${id}`, {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete thread');
@@ -67,7 +81,7 @@ const api = {
             body.spiral_prefs = spiralPrefs;
         }
 
-        const response = await fetch(`${API_BASE}/messages`, {
+        const response = await authFetch(`${API_BASE}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -80,7 +94,7 @@ const api = {
      * Delete a message.
      */
     async deleteMessage(id) {
-        const response = await fetch(`${API_BASE}/messages/${id}`, {
+        const response = await authFetch(`${API_BASE}/messages/${id}`, {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete message');
@@ -93,7 +107,7 @@ const api = {
      * @param {Object} layouts - Map of message ID to layout data JSON string
      */
     async saveLayouts(threadId, layouts) {
-        const response = await fetch(`${API_BASE}/threads/${threadId}/layouts`, {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/layouts`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ layouts })
@@ -107,7 +121,7 @@ const api = {
      * @param {number} threadId - Thread ID
      */
     async clearLayouts(threadId) {
-        const response = await fetch(`${API_BASE}/threads/${threadId}/layouts`, {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/layouts`, {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to clear layouts');
@@ -119,17 +133,16 @@ const api = {
      * @param {number} threadId - Thread ID
      */
     async exportThread(threadId) {
-        const response = await fetch(`${API_BASE}/threads/${threadId}/export`);
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/export`);
         if (!response.ok) throw new Error('Failed to export thread');
         return response.json();
     },
 
     /**
-     * Import a thread from JSON data.
-     * @param {Object} data - Thread data with title and messages
+     * Send Discord notification for a thread.
      */
     async notifyDiscord(threadId) {
-        const response = await fetch(`${API_BASE}/threads/${threadId}/notify-discord`, {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/notify-discord`, {
             method: 'POST'
         });
         if (!response.ok) {
@@ -139,15 +152,84 @@ const api = {
         return response.json();
     },
 
+    /**
+     * Import a thread from JSON data.
+     */
     async importThread(data) {
-        const response = await fetch(`${API_BASE}/threads/import`, {
+        const response = await authFetch(`${API_BASE}/threads/import`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         });
         if (!response.ok) throw new Error('Failed to import thread');
         return response.json();
-    }
+    },
+
+    // =====================================================================
+    // Auth methods
+    // =====================================================================
+
+    async login(username, password) {
+        const response = await fetch(`${API_BASE}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Login failed');
+        }
+        return response.json();
+    },
+
+    async register(username, password) {
+        const response = await fetch(`${API_BASE}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Registration failed');
+        }
+        return response.json();
+    },
+
+    async logout() {
+        const response = await fetch(`${API_BASE}/auth/logout`, {
+            method: 'POST'
+        });
+        return response.json();
+    },
+
+    async getMe() {
+        const response = await authFetch(`${API_BASE}/auth/me`);
+        if (!response.ok) return null;
+        return response.json();
+    },
+
+    // =====================================================================
+    // Share methods
+    // =====================================================================
+
+    async shareThread(threadId, mode = 'view') {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode })
+        });
+        if (!response.ok) throw new Error('Failed to share thread');
+        return response.json();
+    },
+
+    async unshareThread(threadId) {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/share`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to revoke share');
+        return response.json();
+    },
+
 };
 
 // Export

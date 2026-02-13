@@ -494,3 +494,48 @@ select:focus {
     z-index: 100;
     white-space: nowrap;
 }
+
+/* User info in header */
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    margin-right: 16px;
+}
+
+.username-display {
+    color: var(--curve-color);
+    font-size: 14px;
+}
+
+/* Read-only banner */
+.readonly-banner {
+    background: rgba(0, 217, 255, 0.15);
+    color: var(--curve-color);
+    text-align: center;
+    padding: 6px 0;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Share modal */
+.share-modal-content {
+    max-width: 500px;
+}
+
+.share-link-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.share-link-row input {
+    flex: 1;
+}
+
+.share-modal-content select {
+    min-width: 100%;
+}

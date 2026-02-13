@@ -1,6 +1,8 @@
 import sqlite3
 import os
+import secrets
 from contextlib import contextmanager
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Turso configuration (remote database)
 TURSO_DATABASE_URL = os.environ.get('TURSO_DATABASE_URL')
@@ -33,10 +35,21 @@ def init_db():
 
     with get_connection() as conn:
         conn.executescript('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS threads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id INTEGER,
+                share_token TEXT,
+                share_mode TEXT DEFAULT 'view',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -53,12 +66,41 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
             CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
+
+            CREATE TABLE IF NOT EXISTS thread_collaborators (
+                thread_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (thread_id, user_id),
+                FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
         ''')
         # Add layout_data column if it doesn't exist (migration for existing DBs)
         try:
             conn.execute('ALTER TABLE messages ADD COLUMN layout_data TEXT')
         except (sqlite3.OperationalError, ValueError):
             pass  # Column already exists
+        # Add user_id column to threads if it doesn't exist (migration)
+        try:
+            conn.execute('ALTER TABLE threads ADD COLUMN user_id INTEGER')
+        except (sqlite3.OperationalError, ValueError):
+            pass
+        # Add share_token column to threads if it doesn't exist (migration)
+        try:
+            conn.execute('ALTER TABLE threads ADD COLUMN share_token TEXT')
+        except (sqlite3.OperationalError, ValueError):
+            pass
+        # Add share_mode column to threads if it doesn't exist (migration)
+        try:
+            conn.execute("ALTER TABLE threads ADD COLUMN share_mode TEXT DEFAULT 'view'")
+        except (sqlite3.OperationalError, ValueError):
+            pass
+        # Create index on share_token (after column is guaranteed to exist)
+        try:
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_threads_share_token ON threads(share_token)')
+        except (sqlite3.OperationalError, ValueError):
+            pass
 
 def rows_to_dicts(columns, rows):
     """Convert rows to list of dicts using column names."""
@@ -88,20 +130,88 @@ def get_connection():
     finally:
         conn.close()
 
-def get_all_threads():
-    """Get all threads with message counts."""
+# =========================================================================
+# User functions
+# =========================================================================
+
+def create_user(username, password):
+    """Create a new user. Returns user dict or raises on duplicate."""
+    password_hash = generate_password_hash(password)
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'INSERT INTO users (username, password_hash) VALUES (?, ?)',
+            (username, password_hash)
+        )
+        return {
+            'id': get_last_insert_id(conn, cursor),
+            'username': username
+        }
+
+def get_user_by_username(username):
+    """Look up a user by username."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT id, username, password_hash FROM users WHERE username = ?',
+            (username,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            return row_to_dict(['id', 'username', 'password_hash'], row)
+        return dict(row)
+
+def authenticate_user(username, password):
+    """Verify credentials. Returns user dict (without hash) or None."""
+    user = get_user_by_username(username)
+    if user and check_password_hash(user['password_hash'], password):
+        return {'id': user['id'], 'username': user['username']}
+    return None
+
+def get_user_by_id(user_id):
+    """Look up a user by ID."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT id, username FROM users WHERE id = ?',
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            return row_to_dict(['id', 'username'], row)
+        return dict(row)
+
+def claim_orphan_threads(user_id):
+    """Assign all threads with user_id IS NULL to the given user."""
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE threads SET user_id = ? WHERE user_id IS NULL',
+            (user_id,)
+        )
+
+# =========================================================================
+# Thread functions
+# =========================================================================
+
+def get_all_threads(user_id):
+    """Get all threads for a user (owned + collaborated) with message counts."""
     with get_connection() as conn:
         cursor = conn.execute('''
-            SELECT t.id, t.title, t.created_at,
-                   COUNT(m.id) as message_count
+            SELECT t.id, t.title, t.created_at, t.share_token, t.share_mode,
+                   COUNT(m.id) as message_count,
+                   CASE WHEN t.user_id = ? THEN 1 ELSE 0 END as is_owner
             FROM threads t
             LEFT JOIN messages m ON t.id = m.thread_id
+            WHERE t.user_id = ?
+               OR t.id IN (SELECT thread_id FROM thread_collaborators WHERE user_id = ?)
             GROUP BY t.id
             ORDER BY t.created_at DESC
-        ''')
+        ''', (user_id, user_id, user_id))
         rows = cursor.fetchall()
+        cols = ['id', 'title', 'created_at', 'share_token', 'share_mode', 'message_count', 'is_owner']
         if TURSO_DATABASE_URL:
-            return rows_to_dicts(['id', 'title', 'created_at', 'message_count'], rows)
+            return rows_to_dicts(cols, rows)
         return [dict(row) for row in rows]
 
 def get_thread_with_messages(thread_id):
@@ -109,13 +219,16 @@ def get_thread_with_messages(thread_id):
     with get_connection() as conn:
         # Get thread
         cursor = conn.execute(
-            'SELECT id, title, created_at FROM threads WHERE id = ?',
+            'SELECT id, title, created_at, user_id, share_token, share_mode FROM threads WHERE id = ?',
             (thread_id,)
         )
         row = cursor.fetchone()
         if not row:
             return None
-        thread = row_to_dict(['id', 'title', 'created_at'], row) if TURSO_DATABASE_URL else dict(row)
+        if TURSO_DATABASE_URL:
+            thread = row_to_dict(['id', 'title', 'created_at', 'user_id', 'share_token', 'share_mode'], row)
+        else:
+            thread = dict(row)
 
         # Get messages
         cursor = conn.execute('''
@@ -135,15 +248,32 @@ def get_thread_with_messages(thread_id):
             'id': thread['id'],
             'title': thread['title'],
             'created_at': thread['created_at'],
+            'user_id': thread['user_id'],
+            'share_token': thread['share_token'],
+            'share_mode': thread['share_mode'],
             'messages': messages
         }
 
-def create_thread(title):
-    """Create a new thread."""
+def get_thread_owner(thread_id):
+    """Return the user_id that owns a thread, or None."""
     with get_connection() as conn:
         cursor = conn.execute(
-            'INSERT INTO threads (title) VALUES (?)',
-            (title,)
+            'SELECT user_id FROM threads WHERE id = ?',
+            (thread_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            return row[0]
+        return row['user_id']
+
+def create_thread(title, user_id):
+    """Create a new thread owned by user_id."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'INSERT INTO threads (title, user_id) VALUES (?, ?)',
+            (title, user_id)
         )
         return {
             'id': get_last_insert_id(conn, cursor),
@@ -155,6 +285,74 @@ def delete_thread(thread_id):
     with get_connection() as conn:
         conn.execute('DELETE FROM threads WHERE id = ?', (thread_id,))
         return True
+
+# =========================================================================
+# Share functions
+# =========================================================================
+
+def generate_share_token(thread_id):
+    """Create and save a share token for a thread. Returns the token."""
+    token = secrets.token_urlsafe(24)
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE threads SET share_token = ? WHERE id = ?',
+            (token, thread_id)
+        )
+    return token
+
+def update_share_mode(thread_id, mode):
+    """Set share mode to 'view' or 'collaborate'."""
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE threads SET share_mode = ? WHERE id = ?',
+            (mode, thread_id)
+        )
+
+def revoke_share_token(thread_id):
+    """Remove the share token from a thread."""
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE threads SET share_token = NULL WHERE id = ?',
+            (thread_id,)
+        )
+
+def get_thread_by_share_token(token):
+    """Look up a thread by its share token. Returns {id, share_mode} or None."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT id, share_mode FROM threads WHERE share_token = ?',
+            (token,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            return row_to_dict(['id', 'share_mode'], row)
+        return dict(row)
+
+def add_collaborator(thread_id, user_id):
+    """Add a user as a collaborator on a thread. Idempotent."""
+    with get_connection() as conn:
+        try:
+            conn.execute(
+                'INSERT INTO thread_collaborators (thread_id, user_id) VALUES (?, ?)',
+                (thread_id, user_id)
+            )
+        except (sqlite3.IntegrityError, Exception):
+            pass  # Already a collaborator
+
+def is_collaborator(thread_id, user_id):
+    """Check if a user is a collaborator on a thread."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT 1 FROM thread_collaborators WHERE thread_id = ? AND user_id = ?',
+            (thread_id, user_id)
+        )
+        return cursor.fetchone() is not None
+
+# =========================================================================
+# Message functions
+# =========================================================================
 
 def create_message(thread_id, parent_id, writer_name, content, spiral_prefs=None):
     """Create a new message in a thread.
@@ -187,6 +385,20 @@ def delete_message(message_id):
     with get_connection() as conn:
         conn.execute('DELETE FROM messages WHERE id = ?', (message_id,))
         return True
+
+def get_message_thread_id(message_id):
+    """Get the thread_id for a message."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT thread_id FROM messages WHERE id = ?',
+            (message_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            return row[0]
+        return row['thread_id']
 
 def update_message_layout(message_id, layout_data):
     """Update layout data for a single message."""
@@ -225,7 +437,7 @@ def get_last_insert_id(conn, cursor):
         return result[0] if result else None
     return cursor.lastrowid
 
-def import_thread(data):
+def import_thread(data, user_id):
     """Import a thread with messages from JSON data.
 
     data: dict with 'title' and optional 'messages' array
@@ -236,8 +448,8 @@ def import_thread(data):
     with get_connection() as conn:
         # Create the thread
         cursor = conn.execute(
-            'INSERT INTO threads (title) VALUES (?)',
-            (data['title'],)
+            'INSERT INTO threads (title, user_id) VALUES (?, ?)',
+            (data['title'], user_id)
         )
         thread_id = get_last_insert_id(conn, cursor)
 
