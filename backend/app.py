@@ -81,7 +81,7 @@ def check_thread_access(thread_id, require_write=False):
 # Request lifecycle
 # =========================================================================
 
-PUBLIC_PREFIXES = ('/login', '/api/auth/', '/shared/', '/css/', '/js/', '/favicon')
+PUBLIC_PREFIXES = ('/login', '/api/auth/', '/css/', '/js/', '/favicon')
 
 @app.before_request
 def before_request():
@@ -112,26 +112,6 @@ def serve_login():
     if get_current_user():
         return redirect('/')
     return send_from_directory(FRONTEND_DIR, 'login.html')
-
-@app.route('/shared/<token>')
-def accept_share(token):
-    """Accept a share invite: add thread to user's list, redirect to main app."""
-    share_info = database.get_thread_by_share_token(token)
-    if not share_info:
-        return send_from_directory(FRONTEND_DIR, 'login.html')  # invalid token
-
-    user_id = get_current_user()
-    if not user_id:
-        # Remember where to go after login
-        session['pending_share_token'] = token
-        return redirect('/login')
-
-    # Don't add owner as collaborator on their own thread
-    owner_id = database.get_thread_owner(share_info['id'])
-    if owner_id != user_id:
-        database.add_collaborator(share_info['id'], user_id)
-
-    return redirect(f'/?thread={share_info["id"]}')
 
 @app.route('/')
 def serve_index():
@@ -178,13 +158,7 @@ def register():
     # Claim orphan threads (one-time migration for existing data)
     database.claim_orphan_threads(user['id'])
 
-    # Check for pending share invite
-    redirect_url = None
-    pending_token = session.pop('pending_share_token', None)
-    if pending_token:
-        redirect_url = f'/shared/{pending_token}'
-
-    return jsonify({'id': user['id'], 'username': user['username'], 'redirect': redirect_url}), 201
+    return jsonify({'id': user['id'], 'username': user['username']}), 201
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -203,13 +177,7 @@ def login():
     session['user_id'] = user['id']
     session['username'] = user['username']
 
-    # Check for pending share invite
-    redirect_url = None
-    pending_token = session.pop('pending_share_token', None)
-    if pending_token:
-        redirect_url = f'/shared/{pending_token}'
-
-    return jsonify({'id': user['id'], 'username': user['username'], 'redirect': redirect_url})
+    return jsonify({'id': user['id'], 'username': user['username']})
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
@@ -258,12 +226,20 @@ def get_thread(thread_id):
 @app.route('/api/threads', methods=['POST'])
 @login_required
 def create_thread():
-    """Create a new thread."""
+    """Create a new thread, optionally sharing with friends."""
     data = request.get_json()
     if not data or 'title' not in data:
         return jsonify({'error': 'Title is required'}), 400
 
-    thread = database.create_thread(data['title'], get_current_user())
+    user_id = get_current_user()
+    thread = database.create_thread(data['title'], user_id)
+
+    # Add friends as collaborators if provided
+    friend_ids = data.get('friend_ids', [])
+    for fid in friend_ids:
+        if database.are_friends(user_id, fid):
+            database.add_collaborator(thread['id'], fid)
+
     return jsonify(thread), 201
 
 @app.route('/api/threads/<int:thread_id>', methods=['DELETE'])
@@ -439,55 +415,138 @@ def notify_discord(thread_id):
         return jsonify({'error': 'Failed to send Discord notification'}), 500
 
 # =========================================================================
-# Share endpoints
+# Friend endpoints
 # =========================================================================
 
-@app.route('/api/threads/<int:thread_id>/share', methods=['POST'])
+@app.route('/api/users/search', methods=['GET'])
 @login_required
-def share_thread(thread_id):
-    """Generate or update a share link for a thread. Owner only."""
-    allowed, is_owner = check_thread_access(thread_id)
-    if not allowed or not is_owner:
-        return jsonify({'error': 'Access denied'}), 403
+def search_users():
+    """Search users by username (min 2 chars)."""
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 2:
+        return jsonify([])
+    results = database.search_users(q, get_current_user())
+    return jsonify(results)
 
-    data = request.get_json() or {}
-    mode = data.get('mode', 'view')
-    if mode not in ('view', 'collaborate'):
-        return jsonify({'error': 'Invalid share mode'}), 400
+@app.route('/api/friends', methods=['GET'])
+@login_required
+def get_friends():
+    """List accepted friends."""
+    friends = database.get_friends(get_current_user())
+    return jsonify(friends)
 
-    # Check if thread already has a token
-    thread = database.get_thread_with_messages(thread_id)
-    if thread and thread.get('share_token'):
-        token = thread['share_token']
-    else:
-        token = database.generate_share_token(thread_id)
-
-    database.update_share_mode(thread_id, mode)
-
+@app.route('/api/friends/requests', methods=['GET'])
+@login_required
+def get_friend_requests():
+    """Get incoming + outgoing friend requests."""
+    user_id = get_current_user()
     return jsonify({
-        'share_token': token,
-        'share_mode': mode,
-        'url': f'/shared/{token}'
+        'incoming': database.get_pending_requests(user_id),
+        'outgoing': database.get_outgoing_requests(user_id)
     })
 
-@app.route('/api/threads/<int:thread_id>/share', methods=['DELETE'])
+@app.route('/api/friends/requests/count', methods=['GET'])
 @login_required
-def unshare_thread(thread_id):
-    """Revoke a share link. Owner only."""
+def get_friend_request_count():
+    """Get pending incoming request count for badge."""
+    count = database.get_pending_request_count(get_current_user())
+    return jsonify({'count': count})
+
+@app.route('/api/friends/request', methods=['POST'])
+@login_required
+def send_friend_request():
+    """Send a friend request."""
+    data = request.get_json()
+    if not data or 'user_id' not in data:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    receiver_id = data['user_id']
+    sender_id = get_current_user()
+
+    if receiver_id == sender_id:
+        return jsonify({'error': 'Cannot send friend request to yourself'}), 400
+
+    # Verify receiver exists
+    user = database.get_user_by_id(receiver_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    result = database.send_friend_request(sender_id, receiver_id)
+    return jsonify(result)
+
+@app.route('/api/friends/requests/<int:request_id>/accept', methods=['POST'])
+@login_required
+def accept_friend_request(request_id):
+    """Accept a friend request."""
+    result = database.respond_to_friend_request(request_id, get_current_user(), 'accept')
+    if not result:
+        return jsonify({'error': 'Request not found or not yours'}), 404
+    return jsonify(result)
+
+@app.route('/api/friends/requests/<int:request_id>/decline', methods=['POST'])
+@login_required
+def decline_friend_request(request_id):
+    """Decline a friend request."""
+    result = database.respond_to_friend_request(request_id, get_current_user(), 'decline')
+    if not result:
+        return jsonify({'error': 'Request not found or not yours'}), 404
+    return jsonify(result)
+
+@app.route('/api/friends/<int:friend_user_id>', methods=['DELETE'])
+@login_required
+def remove_friend(friend_user_id):
+    """Remove a friend (cascades to collaborator access)."""
+    user_id = get_current_user()
+    if not database.are_friends(user_id, friend_user_id):
+        return jsonify({'error': 'Not friends'}), 404
+    database.remove_friend(user_id, friend_user_id)
+    return jsonify({'success': True})
+
+# =========================================================================
+# Collaborator endpoints
+# =========================================================================
+
+@app.route('/api/threads/<int:thread_id>/collaborators', methods=['GET'])
+@login_required
+def get_collaborators(thread_id):
+    """List collaborators on a thread."""
+    allowed, _ = check_thread_access(thread_id)
+    if not allowed:
+        return jsonify({'error': 'Access denied'}), 403
+    collaborators = database.get_thread_collaborators(thread_id)
+    return jsonify(collaborators)
+
+@app.route('/api/threads/<int:thread_id>/collaborators', methods=['POST'])
+@login_required
+def add_collaborator(thread_id):
+    """Add a friend as collaborator. Owner only, must be friends."""
     allowed, is_owner = check_thread_access(thread_id)
     if not allowed or not is_owner:
         return jsonify({'error': 'Access denied'}), 403
 
-    database.revoke_share_token(thread_id)
+    data = request.get_json()
+    if not data or 'user_id' not in data:
+        return jsonify({'error': 'user_id is required'}), 400
+
+    user_id = get_current_user()
+    target_id = data['user_id']
+
+    if not database.are_friends(user_id, target_id):
+        return jsonify({'error': 'Must be friends to add as collaborator'}), 400
+
+    database.add_collaborator(thread_id, target_id)
     return jsonify({'success': True})
 
-@app.route('/api/shared/<token>', methods=['GET'])
-def check_share_token(token):
-    """Validate a share token. Returns thread info if valid."""
-    share_info = database.get_thread_by_share_token(token)
-    if not share_info:
-        return jsonify({'error': 'Invalid or expired share link'}), 404
-    return jsonify({'thread_id': share_info['id'], 'share_mode': share_info['share_mode']})
+@app.route('/api/threads/<int:thread_id>/collaborators/<int:user_id>', methods=['DELETE'])
+@login_required
+def remove_collaborator(thread_id, user_id):
+    """Remove a collaborator from a thread. Owner only."""
+    allowed, is_owner = check_thread_access(thread_id)
+    if not allowed or not is_owner:
+        return jsonify({'error': 'Access denied'}), 403
+
+    database.remove_collaborator(thread_id, user_id)
+    return jsonify({'success': True})
 
 # =========================================================================
 # Debug endpoint

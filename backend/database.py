@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import secrets
 from contextlib import contextmanager
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -74,6 +73,17 @@ def init_db():
                 PRIMARY KEY (thread_id, user_id),
                 FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS friendships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(sender_id, receiver_id)
             );
         ''')
         # Add layout_data column if it doesn't exist (migration for existing DBs)
@@ -198,7 +208,7 @@ def get_all_threads(user_id):
     """Get all threads for a user (owned + collaborated) with message counts."""
     with get_connection() as conn:
         cursor = conn.execute('''
-            SELECT t.id, t.title, t.created_at, t.share_token, t.share_mode,
+            SELECT t.id, t.title, t.created_at,
                    COUNT(m.id) as message_count,
                    CASE WHEN t.user_id = ? THEN 1 ELSE 0 END as is_owner
             FROM threads t
@@ -209,7 +219,7 @@ def get_all_threads(user_id):
             ORDER BY t.created_at DESC
         ''', (user_id, user_id, user_id))
         rows = cursor.fetchall()
-        cols = ['id', 'title', 'created_at', 'share_token', 'share_mode', 'message_count', 'is_owner']
+        cols = ['id', 'title', 'created_at', 'message_count', 'is_owner']
         if TURSO_DATABASE_URL:
             return rows_to_dicts(cols, rows)
         return [dict(row) for row in rows]
@@ -219,14 +229,14 @@ def get_thread_with_messages(thread_id):
     with get_connection() as conn:
         # Get thread
         cursor = conn.execute(
-            'SELECT id, title, created_at, user_id, share_token, share_mode FROM threads WHERE id = ?',
+            'SELECT id, title, created_at, user_id FROM threads WHERE id = ?',
             (thread_id,)
         )
         row = cursor.fetchone()
         if not row:
             return None
         if TURSO_DATABASE_URL:
-            thread = row_to_dict(['id', 'title', 'created_at', 'user_id', 'share_token', 'share_mode'], row)
+            thread = row_to_dict(['id', 'title', 'created_at', 'user_id'], row)
         else:
             thread = dict(row)
 
@@ -249,8 +259,6 @@ def get_thread_with_messages(thread_id):
             'title': thread['title'],
             'created_at': thread['created_at'],
             'user_id': thread['user_id'],
-            'share_token': thread['share_token'],
-            'share_mode': thread['share_mode'],
             'messages': messages
         }
 
@@ -286,50 +294,6 @@ def delete_thread(thread_id):
         conn.execute('DELETE FROM threads WHERE id = ?', (thread_id,))
         return True
 
-# =========================================================================
-# Share functions
-# =========================================================================
-
-def generate_share_token(thread_id):
-    """Create and save a share token for a thread. Returns the token."""
-    token = secrets.token_urlsafe(24)
-    with get_connection() as conn:
-        conn.execute(
-            'UPDATE threads SET share_token = ? WHERE id = ?',
-            (token, thread_id)
-        )
-    return token
-
-def update_share_mode(thread_id, mode):
-    """Set share mode to 'view' or 'collaborate'."""
-    with get_connection() as conn:
-        conn.execute(
-            'UPDATE threads SET share_mode = ? WHERE id = ?',
-            (mode, thread_id)
-        )
-
-def revoke_share_token(thread_id):
-    """Remove the share token from a thread."""
-    with get_connection() as conn:
-        conn.execute(
-            'UPDATE threads SET share_token = NULL WHERE id = ?',
-            (thread_id,)
-        )
-
-def get_thread_by_share_token(token):
-    """Look up a thread by its share token. Returns {id, share_mode} or None."""
-    with get_connection() as conn:
-        cursor = conn.execute(
-            'SELECT id, share_mode FROM threads WHERE share_token = ?',
-            (token,)
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
-        if TURSO_DATABASE_URL:
-            return row_to_dict(['id', 'share_mode'], row)
-        return dict(row)
-
 def add_collaborator(thread_id, user_id):
     """Add a user as a collaborator on a thread. Idempotent."""
     with get_connection() as conn:
@@ -349,6 +313,207 @@ def is_collaborator(thread_id, user_id):
             (thread_id, user_id)
         )
         return cursor.fetchone() is not None
+
+def get_thread_collaborators(thread_id):
+    """List collaborators with usernames for a thread."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT tc.user_id, u.username
+            FROM thread_collaborators tc
+            JOIN users u ON tc.user_id = u.id
+            WHERE tc.thread_id = ?
+            ORDER BY u.username
+        ''', (thread_id,))
+        rows = cursor.fetchall()
+        cols = ['user_id', 'username']
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(cols, rows)
+        return [dict(row) for row in rows]
+
+def remove_collaborator(thread_id, user_id):
+    """Remove a user from thread collaborators."""
+    with get_connection() as conn:
+        conn.execute(
+            'DELETE FROM thread_collaborators WHERE thread_id = ? AND user_id = ?',
+            (thread_id, user_id)
+        )
+
+# =========================================================================
+# Friendship functions
+# =========================================================================
+
+def search_users(query, current_user_id):
+    """Search users by username, excluding current user. Limit 20."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT id, username FROM users WHERE username LIKE ? AND id != ? LIMIT 20',
+            (f'%{query}%', current_user_id)
+        )
+        rows = cursor.fetchall()
+        cols = ['id', 'username']
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(cols, rows)
+        return [dict(row) for row in rows]
+
+def send_friend_request(sender_id, receiver_id):
+    """Send a friend request. If reverse pending exists, auto-accept both."""
+    with get_connection() as conn:
+        # Check if a friendship already exists in either direction
+        cursor = conn.execute(
+            'SELECT id, sender_id, receiver_id, status FROM friendships WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)',
+            (sender_id, receiver_id, receiver_id, sender_id)
+        )
+        row = cursor.fetchone()
+        if row:
+            if TURSO_DATABASE_URL:
+                existing = row_to_dict(['id', 'sender_id', 'receiver_id', 'status'], row)
+            else:
+                existing = dict(row)
+
+            if existing['status'] == 'accepted':
+                return {'status': 'already_friends'}
+
+            # Reverse pending request exists — auto-accept
+            if existing['sender_id'] == receiver_id and existing['status'] == 'pending':
+                conn.execute(
+                    'UPDATE friendships SET status = ? WHERE id = ?',
+                    ('accepted', existing['id'])
+                )
+                return {'status': 'accepted'}
+
+            # Same-direction pending already exists
+            return {'status': 'already_pending'}
+
+        # Create new request
+        conn.execute(
+            'INSERT INTO friendships (sender_id, receiver_id, status) VALUES (?, ?, ?)',
+            (sender_id, receiver_id, 'pending')
+        )
+        return {'status': 'pending'}
+
+def get_pending_requests(user_id):
+    """Get incoming pending friend requests with sender username."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT f.id, f.sender_id, u.username as sender_username, f.created_at
+            FROM friendships f
+            JOIN users u ON f.sender_id = u.id
+            WHERE f.receiver_id = ? AND f.status = 'pending'
+            ORDER BY f.created_at DESC
+        ''', (user_id,))
+        rows = cursor.fetchall()
+        cols = ['id', 'sender_id', 'sender_username', 'created_at']
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(cols, rows)
+        return [dict(row) for row in rows]
+
+def get_outgoing_requests(user_id):
+    """Get outgoing pending friend requests with receiver username."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT f.id, f.receiver_id, u.username as receiver_username, f.created_at
+            FROM friendships f
+            JOIN users u ON f.receiver_id = u.id
+            WHERE f.sender_id = ? AND f.status = 'pending'
+            ORDER BY f.created_at DESC
+        ''', (user_id,))
+        rows = cursor.fetchall()
+        cols = ['id', 'receiver_id', 'receiver_username', 'created_at']
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(cols, rows)
+        return [dict(row) for row in rows]
+
+def respond_to_friend_request(friendship_id, user_id, action):
+    """Accept or decline a friend request. Verifies receiver_id matches user_id."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            'SELECT id, receiver_id, status FROM friendships WHERE id = ?',
+            (friendship_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        if TURSO_DATABASE_URL:
+            friendship = row_to_dict(['id', 'receiver_id', 'status'], row)
+        else:
+            friendship = dict(row)
+
+        if friendship['receiver_id'] != user_id:
+            return None
+        if friendship['status'] != 'pending':
+            return {'status': friendship['status']}
+
+        if action == 'accept':
+            conn.execute(
+                'UPDATE friendships SET status = ? WHERE id = ?',
+                ('accepted', friendship_id)
+            )
+            return {'status': 'accepted'}
+        else:
+            conn.execute(
+                'DELETE FROM friendships WHERE id = ?',
+                (friendship_id,)
+            )
+            return {'status': 'declined'}
+
+def get_friends(user_id):
+    """Get accepted friends (in either direction) with friend username."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT
+                CASE WHEN f.sender_id = ? THEN f.receiver_id ELSE f.sender_id END as friend_id,
+                CASE WHEN f.sender_id = ? THEN u2.username ELSE u1.username END as friend_username
+            FROM friendships f
+            JOIN users u1 ON f.sender_id = u1.id
+            JOIN users u2 ON f.receiver_id = u2.id
+            WHERE (f.sender_id = ? OR f.receiver_id = ?) AND f.status = 'accepted'
+            ORDER BY friend_username
+        ''', (user_id, user_id, user_id, user_id))
+        rows = cursor.fetchall()
+        cols = ['friend_id', 'friend_username']
+        if TURSO_DATABASE_URL:
+            return rows_to_dicts(cols, rows)
+        return [dict(row) for row in rows]
+
+def are_friends(user_id, other_user_id):
+    """Check if two users are friends."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT 1 FROM friendships WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) AND status = 'accepted'",
+            (user_id, other_user_id, other_user_id, user_id)
+        )
+        return cursor.fetchone() is not None
+
+def remove_friend(user_id, friend_user_id):
+    """Remove a friendship and cascade-remove collaborator access on threads owned by either user."""
+    with get_connection() as conn:
+        # Delete friendship row
+        conn.execute(
+            'DELETE FROM friendships WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)',
+            (user_id, friend_user_id, friend_user_id, user_id)
+        )
+        # Remove collaborator access on threads owned by user_id
+        conn.execute('''
+            DELETE FROM thread_collaborators
+            WHERE user_id = ? AND thread_id IN (SELECT id FROM threads WHERE user_id = ?)
+        ''', (friend_user_id, user_id))
+        # Remove collaborator access on threads owned by friend_user_id
+        conn.execute('''
+            DELETE FROM thread_collaborators
+            WHERE user_id = ? AND thread_id IN (SELECT id FROM threads WHERE user_id = ?)
+        ''', (user_id, friend_user_id))
+
+def get_pending_request_count(user_id):
+    """Count incoming pending friend requests."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM friendships WHERE receiver_id = ? AND status = 'pending'",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        if TURSO_DATABASE_URL:
+            return row[0] if row else 0
+        return row[0] if row else 0
 
 # =========================================================================
 # Message functions

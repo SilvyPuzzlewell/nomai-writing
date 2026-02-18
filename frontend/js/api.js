@@ -38,13 +38,15 @@ const api = {
     },
 
     /**
-     * Create a new thread.
+     * Create a new thread, optionally sharing with friends.
      */
-    async createThread(title) {
+    async createThread(title, friendIds = []) {
+        const body = { title };
+        if (friendIds.length > 0) body.friend_ids = friendIds;
         const response = await authFetch(`${API_BASE}/threads`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title })
+            body: JSON.stringify(body)
         });
         if (!response.ok) throw new Error('Failed to create thread');
         return response.json();
@@ -209,24 +211,98 @@ const api = {
     },
 
     // =====================================================================
-    // Share methods
+    // Friend methods
     // =====================================================================
 
-    async shareThread(threadId, mode = 'view') {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/share`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode })
-        });
-        if (!response.ok) throw new Error('Failed to share thread');
+    async searchUsers(query) {
+        const response = await authFetch(`${API_BASE}/users/search?q=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error('Failed to search users');
         return response.json();
     },
 
-    async unshareThread(threadId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/share`, {
+    async getFriends() {
+        const response = await authFetch(`${API_BASE}/friends`);
+        if (!response.ok) throw new Error('Failed to get friends');
+        return response.json();
+    },
+
+    async getFriendRequests() {
+        const response = await authFetch(`${API_BASE}/friends/requests`);
+        if (!response.ok) throw new Error('Failed to get friend requests');
+        return response.json();
+    },
+
+    async getPendingRequestCount() {
+        const response = await authFetch(`${API_BASE}/friends/requests/count`);
+        if (!response.ok) return { count: 0 };
+        return response.json();
+    },
+
+    async sendFriendRequest(userId) {
+        const response = await authFetch(`${API_BASE}/friends/request`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to send friend request');
+        }
+        return response.json();
+    },
+
+    async acceptFriendRequest(requestId) {
+        const response = await authFetch(`${API_BASE}/friends/requests/${requestId}/accept`, {
+            method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to accept friend request');
+        return response.json();
+    },
+
+    async declineFriendRequest(requestId) {
+        const response = await authFetch(`${API_BASE}/friends/requests/${requestId}/decline`, {
+            method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to decline friend request');
+        return response.json();
+    },
+
+    async removeFriend(friendUserId) {
+        const response = await authFetch(`${API_BASE}/friends/${friendUserId}`, {
             method: 'DELETE'
         });
-        if (!response.ok) throw new Error('Failed to revoke share');
+        if (!response.ok) throw new Error('Failed to remove friend');
+        return response.json();
+    },
+
+    // =====================================================================
+    // Collaborator methods
+    // =====================================================================
+
+    async getThreadCollaborators(threadId) {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators`);
+        if (!response.ok) throw new Error('Failed to get collaborators');
+        return response.json();
+    },
+
+    async addThreadCollaborator(threadId, userId) {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to add collaborator');
+        }
+        return response.json();
+    },
+
+    async removeThreadCollaborator(threadId, userId) {
+        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators/${userId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to remove collaborator');
         return response.json();
     },
 

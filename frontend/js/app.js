@@ -52,7 +52,7 @@ class NomaiApp {
         // Load threads
         await this.loadThreads();
 
-        // Auto-select thread from URL param (e.g. after accepting a share invite)
+        // Auto-select thread from URL param
         const urlParams = new URLSearchParams(window.location.search);
         const threadParam = urlParams.get('thread');
         if (threadParam) {
@@ -60,10 +60,13 @@ class NomaiApp {
             if (threadId) {
                 document.getElementById('thread-selector').value = threadId;
                 await this.loadThread(threadId);
-                // Clean URL
                 window.history.replaceState({}, '', '/');
             }
         }
+
+        // Start polling for friend request badge
+        this.updateFriendBadge();
+        this.badgeInterval = setInterval(() => this.updateFriendBadge(), 30000);
     }
 
     /**
@@ -209,31 +212,43 @@ class NomaiApp {
             logoutBtn.addEventListener('click', () => this.handleLogout());
         }
 
-        // Share button
-        const shareBtn = document.getElementById('share-btn');
-        if (shareBtn) {
-            shareBtn.addEventListener('click', () => this.showShareModal());
-        }
+        // Friends button
+        document.getElementById('friends-btn').addEventListener('click', () => {
+            this.showFriendsModal();
+        });
 
-        // Share modal events
-        const shareModal = document.getElementById('share-modal');
-        if (shareModal) {
-            shareModal.addEventListener('click', (e) => {
-                if (e.target.id === 'share-modal') this.hideShareModal();
-            });
-            document.getElementById('share-close-btn').addEventListener('click', () => {
-                this.hideShareModal();
-            });
-            document.getElementById('share-copy-btn').addEventListener('click', () => {
-                this.copyShareLink();
-            });
-            document.getElementById('share-mode-select').addEventListener('change', (e) => {
-                this.updateShareMode(e.target.value);
-            });
-            document.getElementById('share-revoke-btn').addEventListener('click', () => {
-                this.revokeShare();
-            });
-        }
+        // Friends modal events
+        document.getElementById('friends-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'friends-modal') this.hideFriendsModal();
+        });
+        document.getElementById('friends-close-btn').addEventListener('click', () => {
+            this.hideFriendsModal();
+        });
+
+        // Friends tab switching
+        document.querySelectorAll('.friends-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => this.switchFriendsTab(e.target.dataset.tab));
+        });
+
+        // Friend search with debounce
+        let searchTimeout = null;
+        document.getElementById('friend-search-input').addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => this.searchFriends(e.target.value.trim()), 300);
+        });
+
+        // Collaborators button
+        document.getElementById('collaborators-btn').addEventListener('click', () => {
+            this.showCollaboratorsModal();
+        });
+
+        // Collaborators modal events
+        document.getElementById('collaborators-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'collaborators-modal') this.hideCollaboratorsModal();
+        });
+        document.getElementById('collaborators-close-btn').addEventListener('click', () => {
+            this.hideCollaboratorsModal();
+        });
     }
 
     /**
@@ -278,6 +293,10 @@ class NomaiApp {
                 this.loadTranslationState(threadId);
             }
             this.currentThreadId = threadId;
+            this.currentThreadOwnerId = thread.user_id;
+
+            // Show collaborators button when a thread is selected
+            document.getElementById('collaborators-btn').classList.remove('hidden');
 
             // Use progressive reveal - only roots visible initially
             this.canvas.setMessagesProgressiveReveal(thread.messages, (layouts) => {
@@ -657,10 +676,12 @@ class NomaiApp {
      */
     clearBoard() {
         this.currentThreadId = null;
+        this.currentThreadOwnerId = null;
         this.canvas.clearTranslated();
         this.canvas.setMessages([]);
         this.clearSelection();
         document.getElementById('thread-selector').value = '';
+        document.getElementById('collaborators-btn').classList.add('hidden');
     }
 
     /**
@@ -1075,10 +1096,27 @@ class NomaiApp {
     /**
      * Show thread creation modal.
      */
-    showThreadModal() {
+    async showThreadModal() {
         document.getElementById('thread-modal').classList.remove('hidden');
         document.getElementById('thread-title-input').value = '';
         document.getElementById('thread-title-input').focus();
+
+        // Populate friend checklist
+        const checklist = document.getElementById('thread-friends-checklist');
+        try {
+            const friends = await api.getFriends();
+            if (friends.length === 0) {
+                checklist.innerHTML = '<p class="hint">No friends yet. Add friends to share threads with them.</p>';
+            } else {
+                checklist.innerHTML = friends.map(f => `
+                    <label class="checkbox-label friend-checkbox">
+                        <input type="checkbox" value="${f.friend_id}"> ${this.escapeHtml(f.friend_username)}
+                    </label>
+                `).join('');
+            }
+        } catch (err) {
+            checklist.innerHTML = '<p class="hint">Failed to load friends</p>';
+        }
     }
 
     /**
@@ -1097,8 +1135,13 @@ class NomaiApp {
 
         if (!title) return;
 
+        // Collect checked friend IDs
+        const friendIds = Array.from(
+            document.querySelectorAll('#thread-friends-checklist input[type="checkbox"]:checked')
+        ).map(cb => parseInt(cb.value));
+
         try {
-            const thread = await api.createThread(title);
+            const thread = await api.createThread(title, friendIds);
             this.hideThreadModal();
             await this.loadThreads();
             document.getElementById('thread-selector').value = thread.id;
@@ -1186,65 +1229,300 @@ class NomaiApp {
     }
 
     // =========================================================================
-    // Auth & Share Handlers
+    // Auth Handlers
     // =========================================================================
 
     async handleLogout() {
+        if (this.badgeInterval) clearInterval(this.badgeInterval);
         await api.logout();
         window.location.href = '/login';
     }
 
-    async showShareModal() {
+    // =========================================================================
+    // Friends Modal
+    // =========================================================================
+
+    async showFriendsModal() {
+        document.getElementById('friends-modal').classList.remove('hidden');
+        this.switchFriendsTab('my-friends');
+    }
+
+    hideFriendsModal() {
+        document.getElementById('friends-modal').classList.add('hidden');
+    }
+
+    switchFriendsTab(tabName) {
+        // Update tab buttons
+        document.querySelectorAll('.friends-tab').forEach(t => t.classList.remove('active'));
+        document.querySelector(`.friends-tab[data-tab="${tabName}"]`).classList.add('active');
+
+        // Update tab content
+        document.querySelectorAll('.friends-tab-content').forEach(c => c.classList.remove('active'));
+        document.getElementById(`tab-${tabName}`).classList.add('active');
+
+        // Load tab data
+        if (tabName === 'my-friends') this.loadFriendsList();
+        if (tabName === 'requests') this.loadFriendRequests();
+        if (tabName === 'add-friend') {
+            document.getElementById('friend-search-input').value = '';
+            document.getElementById('friend-search-results').innerHTML = '<p class="hint">Type at least 2 characters to search</p>';
+            document.getElementById('friend-search-input').focus();
+        }
+    }
+
+    async loadFriendsList() {
+        const container = document.getElementById('friends-list');
+        try {
+            const friends = await api.getFriends();
+            if (friends.length === 0) {
+                container.innerHTML = '<p class="hint">No friends yet. Use the "Add Friend" tab to find people.</p>';
+                return;
+            }
+            container.innerHTML = friends.map(f => `
+                <div class="friend-row">
+                    <span class="friend-username">${this.escapeHtml(f.friend_username)}</span>
+                    <button class="btn btn-small btn-danger" data-friend-id="${f.friend_id}">Remove</button>
+                </div>
+            `).join('');
+            container.querySelectorAll('.btn-danger').forEach(btn => {
+                btn.addEventListener('click', () => this.handleRemoveFriend(parseInt(btn.dataset.friendId)));
+            });
+        } catch (err) {
+            container.innerHTML = '<p class="hint">Failed to load friends</p>';
+        }
+    }
+
+    async loadFriendRequests() {
+        try {
+            const data = await api.getFriendRequests();
+            const incomingEl = document.getElementById('incoming-requests');
+            const outgoingEl = document.getElementById('outgoing-requests');
+
+            if (data.incoming.length === 0) {
+                incomingEl.innerHTML = '<p class="hint">No pending requests</p>';
+            } else {
+                incomingEl.innerHTML = data.incoming.map(r => `
+                    <div class="request-row">
+                        <span class="friend-username">${this.escapeHtml(r.sender_username)}</span>
+                        <div class="request-actions">
+                            <button class="btn btn-small btn-primary accept-btn" data-id="${r.id}">Accept</button>
+                            <button class="btn btn-small btn-danger decline-btn" data-id="${r.id}">Decline</button>
+                        </div>
+                    </div>
+                `).join('');
+                incomingEl.querySelectorAll('.accept-btn').forEach(btn => {
+                    btn.addEventListener('click', () => this.handleAcceptRequest(parseInt(btn.dataset.id)));
+                });
+                incomingEl.querySelectorAll('.decline-btn').forEach(btn => {
+                    btn.addEventListener('click', () => this.handleDeclineRequest(parseInt(btn.dataset.id)));
+                });
+            }
+
+            if (data.outgoing.length === 0) {
+                outgoingEl.innerHTML = '<p class="hint">No outgoing requests</p>';
+            } else {
+                outgoingEl.innerHTML = data.outgoing.map(r => `
+                    <div class="request-row">
+                        <span class="friend-username">${this.escapeHtml(r.receiver_username)}</span>
+                        <span class="hint">Pending</span>
+                    </div>
+                `).join('');
+            }
+        } catch (err) {
+            console.error('Failed to load friend requests:', err);
+        }
+    }
+
+    async searchFriends(query) {
+        const container = document.getElementById('friend-search-results');
+        if (query.length < 2) {
+            container.innerHTML = '<p class="hint">Type at least 2 characters to search</p>';
+            return;
+        }
+
+        try {
+            const users = await api.searchUsers(query);
+            if (users.length === 0) {
+                container.innerHTML = '<p class="hint">No users found</p>';
+                return;
+            }
+            container.innerHTML = users.map(u => `
+                <div class="search-result-row">
+                    <span class="friend-username">${this.escapeHtml(u.username)}</span>
+                    <button class="btn btn-small btn-primary" data-user-id="${u.id}">Add</button>
+                </div>
+            `).join('');
+            container.querySelectorAll('.btn-primary').forEach(btn => {
+                btn.addEventListener('click', () => this.handleSendFriendRequest(parseInt(btn.dataset.userId), btn));
+            });
+        } catch (err) {
+            container.innerHTML = '<p class="hint">Search failed</p>';
+        }
+    }
+
+    async handleSendFriendRequest(userId, btn) {
+        try {
+            const result = await api.sendFriendRequest(userId);
+            if (result.status === 'accepted') {
+                btn.textContent = 'Friends!';
+            } else if (result.status === 'already_friends') {
+                btn.textContent = 'Already friends';
+            } else if (result.status === 'already_pending') {
+                btn.textContent = 'Pending';
+            } else {
+                btn.textContent = 'Sent!';
+            }
+            btn.disabled = true;
+        } catch (err) {
+            alert(err.message);
+        }
+    }
+
+    async handleAcceptRequest(requestId) {
+        try {
+            await api.acceptFriendRequest(requestId);
+            this.loadFriendRequests();
+            this.updateFriendBadge();
+        } catch (err) {
+            console.error('Failed to accept request:', err);
+        }
+    }
+
+    async handleDeclineRequest(requestId) {
+        try {
+            await api.declineFriendRequest(requestId);
+            this.loadFriendRequests();
+            this.updateFriendBadge();
+        } catch (err) {
+            console.error('Failed to decline request:', err);
+        }
+    }
+
+    async handleRemoveFriend(friendUserId) {
+        if (!confirm('Remove this friend? They will lose access to your shared threads.')) return;
+        try {
+            await api.removeFriend(friendUserId);
+            this.loadFriendsList();
+            // Reload threads in case collaborator access changed
+            await this.loadThreads();
+        } catch (err) {
+            console.error('Failed to remove friend:', err);
+        }
+    }
+
+    async updateFriendBadge() {
+        try {
+            const data = await api.getPendingRequestCount();
+            const badge = document.getElementById('friend-request-badge');
+            const tabBadge = document.getElementById('tab-request-badge');
+            if (data.count > 0) {
+                badge.textContent = data.count;
+                badge.classList.remove('hidden');
+                if (tabBadge) {
+                    tabBadge.textContent = data.count;
+                    tabBadge.classList.remove('hidden');
+                }
+            } else {
+                badge.classList.add('hidden');
+                if (tabBadge) tabBadge.classList.add('hidden');
+            }
+        } catch (err) {
+            // Silently ignore badge update failures
+        }
+    }
+
+    // =========================================================================
+    // Collaborators Modal
+    // =========================================================================
+
+    async showCollaboratorsModal() {
         if (!this.currentThreadId) {
             alert('Please select a thread first');
             return;
         }
 
-        try {
-            const data = await api.shareThread(this.currentThreadId);
-            const url = window.location.origin + data.url;
+        document.getElementById('collaborators-modal').classList.remove('hidden');
+        await this.loadCollaborators();
+    }
 
-            document.getElementById('share-link-input').value = url;
-            document.getElementById('share-mode-select').value = data.share_mode;
-            document.getElementById('share-modal').classList.remove('hidden');
+    hideCollaboratorsModal() {
+        document.getElementById('collaborators-modal').classList.add('hidden');
+    }
+
+    async loadCollaborators() {
+        const listEl = document.getElementById('collaborators-list');
+        const addEl = document.getElementById('add-collaborator-list');
+
+        try {
+            const [collaborators, friends] = await Promise.all([
+                api.getThreadCollaborators(this.currentThreadId),
+                api.getFriends()
+            ]);
+
+            const me = await api.getMe();
+            const isOwner = me && this.currentThreadOwnerId === me.id;
+
+            // Show current collaborators
+            if (collaborators.length === 0) {
+                listEl.innerHTML = '<p class="hint">No collaborators yet</p>';
+            } else {
+                listEl.innerHTML = collaborators.map(c => `
+                    <div class="friend-row">
+                        <span class="friend-username">${this.escapeHtml(c.username)}</span>
+                        ${isOwner ? `<button class="btn btn-small btn-danger remove-collab" data-user-id="${c.user_id}">Remove</button>` : ''}
+                    </div>
+                `).join('');
+                if (isOwner) {
+                    listEl.querySelectorAll('.remove-collab').forEach(btn => {
+                        btn.addEventListener('click', () => this.handleRemoveCollaborator(parseInt(btn.dataset.userId)));
+                    });
+                }
+            }
+
+            // Show friends that can be added (not already collaborators, owner only)
+            if (!isOwner) {
+                addEl.innerHTML = '<p class="hint">Only the thread owner can add collaborators</p>';
+                return;
+            }
+
+            const collabIds = new Set(collaborators.map(c => c.user_id));
+            const addable = friends.filter(f => !collabIds.has(f.friend_id));
+
+            if (addable.length === 0) {
+                addEl.innerHTML = '<p class="hint">All friends are already collaborators</p>';
+            } else {
+                addEl.innerHTML = addable.map(f => `
+                    <div class="friend-row">
+                        <span class="friend-username">${this.escapeHtml(f.friend_username)}</span>
+                        <button class="btn btn-small btn-primary add-collab" data-user-id="${f.friend_id}">Add</button>
+                    </div>
+                `).join('');
+                addEl.querySelectorAll('.add-collab').forEach(btn => {
+                    btn.addEventListener('click', () => this.handleAddCollaborator(parseInt(btn.dataset.userId)));
+                });
+            }
         } catch (err) {
-            console.error('Failed to create share link:', err);
-            alert('Failed to create share link');
+            listEl.innerHTML = '<p class="hint">Failed to load collaborators</p>';
+            addEl.innerHTML = '';
+            console.error('Failed to load collaborators:', err);
         }
     }
 
-    hideShareModal() {
-        document.getElementById('share-modal').classList.add('hidden');
-    }
-
-    copyShareLink() {
-        const input = document.getElementById('share-link-input');
-        input.select();
-        navigator.clipboard.writeText(input.value).then(() => {
-            const btn = document.getElementById('share-copy-btn');
-            btn.textContent = 'Copied!';
-            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-        });
-    }
-
-    async updateShareMode(mode) {
-        if (!this.currentThreadId) return;
+    async handleAddCollaborator(userId) {
         try {
-            await api.shareThread(this.currentThreadId, mode);
+            await api.addThreadCollaborator(this.currentThreadId, userId);
+            await this.loadCollaborators();
         } catch (err) {
-            console.error('Failed to update share mode:', err);
+            alert(err.message);
         }
     }
 
-    async revokeShare() {
-        if (!this.currentThreadId) return;
-        if (!confirm('Revoke this share link? Anyone with the link will lose access.')) return;
-
+    async handleRemoveCollaborator(userId) {
         try {
-            await api.unshareThread(this.currentThreadId);
-            this.hideShareModal();
+            await api.removeThreadCollaborator(this.currentThreadId, userId);
+            await this.loadCollaborators();
         } catch (err) {
-            console.error('Failed to revoke share:', err);
+            console.error('Failed to remove collaborator:', err);
         }
     }
 

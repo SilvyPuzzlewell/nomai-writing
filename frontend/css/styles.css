@@ -521,21 +521,125 @@ select:focus {
     border-bottom: 1px solid var(--border-color);
 }
 
-/* Share modal */
-.share-modal-content {
+/* Friends modal */
+.friends-modal-content {
     max-width: 500px;
 }
 
-.share-link-row {
+.friends-tabs {
     display: flex;
-    gap: 8px;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 8px;
+}
+
+.friends-tab {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px 4px 0 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    transition: color 0.2s, background 0.2s;
+    position: relative;
+}
+
+.friends-tab:hover {
+    color: var(--text-color);
+}
+
+.friends-tab.active {
+    color: var(--curve-color);
+    background: rgba(0, 217, 255, 0.1);
+}
+
+.friends-tab-content {
+    display: none;
+}
+
+.friends-tab-content.active {
+    display: block;
+}
+
+.friends-tab-content h4 {
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 12px 0 8px;
+}
+
+.friends-list {
+    max-height: 250px;
+    overflow-y: auto;
+}
+
+.friend-row,
+.request-row,
+.search-result-row {
+    display: flex;
     align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
 }
 
-.share-link-row input {
-    flex: 1;
+.friend-row:hover,
+.request-row:hover,
+.search-result-row:hover {
+    border-color: var(--curve-color);
 }
 
-.share-modal-content select {
-    min-width: 100%;
+.friend-username {
+    color: var(--text-color);
+    font-size: 14px;
+}
+
+.request-actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* Badge */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--danger-color);
+    color: #fff;
+    font-size: 11px;
+    font-weight: bold;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* Friends checklist in thread creation modal */
+.friends-checklist {
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 8px;
+    background: var(--bg-color);
+}
+
+.friend-checkbox {
+    display: flex;
+    padding: 4px 8px;
+    margin: 0;
+}
+
+/* Collaborators list */
+.collaborators-list {
+    max-height: 200px;
+    overflow-y: auto;
 }
