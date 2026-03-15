@@ -135,27 +135,6 @@ select:focus {
     display: block;
 }
 
-/* Floating action button */
-#fab-add {
-    position: absolute;
-    bottom: 30px;
-    right: 30px;
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    border: none;
-    background: var(--curve-color);
-    color: #000;
-    font-size: 28px;
-    cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 217, 255, 0.3);
-    transition: transform 0.2s, box-shadow 0.2s;
-}
-
-#fab-add:hover {
-    transform: scale(1.1);
-    box-shadow: 0 6px 16px rgba(0, 217, 255, 0.5);
-}
 
 /* Translation panel */
 #translation-panel {
@@ -286,19 +265,6 @@ select:focus {
     margin-top: 6px;
 }
 
-.parent-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    background: var(--bg-color);
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-}
-
-.parent-info span {
-    color: var(--selected-color);
-}
 
 .form-actions {
     display: flex;
@@ -354,107 +320,6 @@ select:focus {
     background: var(--btn-bg);
 }
 
-/* Spiral Settings */
-.spiral-toggle {
-    width: 100%;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-}
-
-.toggle-arrow {
-    font-size: 10px;
-    transition: transform 0.2s;
-}
-
-.toggle-arrow.expanded {
-    transform: rotate(90deg);
-}
-
-.spiral-settings {
-    background: var(--bg-color);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    padding: 16px;
-    margin-top: -8px;
-}
-
-.spiral-settings .form-group {
-    margin-bottom: 12px;
-}
-
-.spiral-settings .form-group:last-child {
-    margin-bottom: 0;
-}
-
-.slider-container {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.slider-container input[type="range"] {
-    flex: 1;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 6px;
-    background: var(--border-color);
-    border-radius: 3px;
-    cursor: pointer;
-}
-
-.slider-container input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    background: var(--curve-color);
-    border-radius: 50%;
-    cursor: pointer;
-    transition: transform 0.1s;
-}
-
-.slider-container input[type="range"]::-webkit-slider-thumb:hover {
-    transform: scale(1.2);
-}
-
-.slider-container input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    background: var(--curve-color);
-    border: none;
-    border-radius: 50%;
-    cursor: pointer;
-}
-
-.slider-value {
-    min-width: 50px;
-    text-align: right;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.radio-group {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-}
-
-.radio-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 14px;
-    color: var(--text-color);
-    cursor: pointer;
-}
-
-.radio-label input[type="radio"] {
-    accent-color: var(--curve-color);
-    cursor: pointer;
-}
 
 /* Collision modal */
 .collision-modal-content {
@@ -467,16 +332,6 @@ select:focus {
     line-height: 1.5;
 }
 
-/* Drawing mode hint */
-.drawing-hint {
-    color: var(--curve-color);
-    font-style: italic;
-    padding: 8px 12px;
-    background: rgba(0, 217, 255, 0.1);
-    border-radius: 4px;
-    border-left: 3px solid var(--curve-color);
-    transition: all 0.2s;
-}
 
 /* Drawing status indicator on canvas */
 .drawing-status {

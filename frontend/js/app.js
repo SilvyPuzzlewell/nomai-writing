@@ -12,8 +12,6 @@ class NomaiApp {
         this.drawnSpiralParams = null; // Stores { branchT, curvatureDir, curvatureTightness, startAngle }
         this.spiralGenerator = null; // Reusable spiral generator
 
-        // Cache last used writer name
-        this.lastWriterName = '';
 
         this.init();
     }
@@ -133,10 +131,7 @@ class NomaiApp {
             this.handleClearBoard();
         });
 
-        // FAB add button
-        document.getElementById('fab-add').addEventListener('click', () => {
-            this.showMessageModal();
-        });
+
 
         // Thread form
         document.getElementById('thread-form').addEventListener('submit', (e) => {
@@ -158,9 +153,7 @@ class NomaiApp {
             this.hideMessageModal();
         });
 
-        document.getElementById('clear-parent-btn').addEventListener('click', () => {
-            this.clearParentSelection();
-        });
+
 
         // Close modals on backdrop click
         document.getElementById('thread-modal').addEventListener('click', (e) => {
@@ -184,22 +177,6 @@ class NomaiApp {
             if (e.target.id === 'collision-modal') this.hideCollisionModal();
         });
 
-        // Spiral settings toggle
-        document.getElementById('spiral-settings-toggle').addEventListener('click', () => {
-            this.toggleSpiralSettings();
-        });
-
-        // Branch point slider
-        document.getElementById('branch-point').addEventListener('input', (e) => {
-            e.target.dataset.modified = 'true';
-            this.updateBranchPointLabel(e.target.value);
-        });
-
-        // Curvature tightness slider
-        document.getElementById('curv-tightness').addEventListener('input', (e) => {
-            e.target.dataset.modified = 'true';
-            this.updateTightnessLabel(e.target.value);
-        });
 
         // Delete message button
         document.getElementById('delete-message-btn').addEventListener('click', () => {
@@ -517,23 +494,8 @@ class NomaiApp {
         }
 
         document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('writer-input').value = this.lastWriterName;
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
-
-        // Update parent selection display
-        this.updateParentSelection(this.selectedMessage);
-
-        // Update sliders to show drawn values
-        this.updateSlidersFromDrawnParams();
-
-        // Update hint to show confirmed values
-        if (this.drawnSpiralParams) {
-            this.updateDrawingHint(
-                `Branch: ${Math.round(this.drawnSpiralParams.branchT * 100)}%, ` +
-                `Direction: ${this.drawnSpiralParams.curvatureDir.toUpperCase()}`
-            );
-        }
     }
 
     /**
@@ -606,41 +568,7 @@ class NomaiApp {
         return Math.hypot(point.x - projX, point.y - projY);
     }
 
-    /**
-     * Update slider UI values from drawn parameters (for display).
-     */
-    updateSlidersFromDrawnParams() {
-        if (!this.drawnSpiralParams) return;
 
-        // Update branch point slider
-        const branchSlider = document.getElementById('branch-point');
-        if (branchSlider) {
-            branchSlider.value = Math.round(this.drawnSpiralParams.branchT * 100);
-            this.updateBranchPointLabel(branchSlider.value);
-        }
-
-        // Update direction radio
-        const dirValue = this.drawnSpiralParams.curvatureDir;
-        const dirRadio = document.querySelector(`input[name="curv-dir"][value="${dirValue}"]`);
-        if (dirRadio) dirRadio.checked = true;
-
-        // Update tightness slider
-        const tightnessSlider = document.getElementById('curv-tightness');
-        if (tightnessSlider) {
-            tightnessSlider.value = Math.round(this.drawnSpiralParams.curvatureTightness * 100);
-            this.updateTightnessLabel(tightnessSlider.value);
-        }
-    }
-
-    /**
-     * Update the drawing hint text in the modal.
-     */
-    updateDrawingHint(text) {
-        const hintEl = document.getElementById('drawing-hint');
-        if (hintEl) {
-            hintEl.textContent = text;
-        }
-    }
 
     /**
      * Update status indicator on canvas.
@@ -804,7 +732,6 @@ class NomaiApp {
      */
     handleMessageSelect(message) {
         this.selectedMessage = message;
-        this.updateParentSelection(message);
         // Show current translation state (don't animate - wait for mouse down)
         this.updateTranslationPanel(message);
         // Show/hide delete button
@@ -968,129 +895,23 @@ class NomaiApp {
     }
 
     /**
-     * Update parent selection display.
-     */
-    updateParentSelection(message) {
-        const parentLabel = document.getElementById('selected-parent');
-        const clearBtn = document.getElementById('clear-parent-btn');
-
-        if (message) {
-            parentLabel.textContent = `${message.writer_name}'s message`;
-            clearBtn.classList.remove('hidden');
-        } else {
-            parentLabel.textContent = 'Root (new branch)';
-            clearBtn.classList.add('hidden');
-        }
-    }
-
-    /**
      * Clear parent selection.
      */
     clearParentSelection() {
         this.selectedMessage = null;
         this.canvas.setSelected(null);
-        this.updateParentSelection(null);
     }
 
-    /**
-     * Toggle spiral settings visibility.
-     */
-    toggleSpiralSettings() {
-        const settings = document.getElementById('spiral-settings');
-        const arrow = document.querySelector('.toggle-arrow');
-        settings.classList.toggle('hidden');
-        arrow.classList.toggle('expanded');
-    }
-
-    /**
-     * Reset spiral settings to defaults.
-     */
-    resetSpiralSettings() {
-        // Collapse settings
-        document.getElementById('spiral-settings').classList.add('hidden');
-        document.querySelector('.toggle-arrow').classList.remove('expanded');
-
-        // Reset branch point slider
-        const branchSlider = document.getElementById('branch-point');
-        branchSlider.value = 50;
-        branchSlider.dataset.modified = 'false';
-        document.getElementById('branch-point-value').textContent = 'Auto';
-
-        // Reset curvature direction
-        document.querySelector('input[name="curv-dir"][value="auto"]').checked = true;
-
-        // Reset curvature tightness slider
-        const tightnessSlider = document.getElementById('curv-tightness');
-        tightnessSlider.value = 100;
-        tightnessSlider.dataset.modified = 'false';
-        document.getElementById('curv-tightness-value').textContent = 'Normal';
-    }
-
-    /**
-     * Update branch point label from slider value.
-     */
-    updateBranchPointLabel(value) {
-        document.getElementById('branch-point-value').textContent = `${value}%`;
-    }
-
-    /**
-     * Update curvature tightness label from slider value.
-     */
-    updateTightnessLabel(value) {
-        const label = document.getElementById('curv-tightness-value');
-        if (value <= 50) {
-            label.textContent = 'Tight';
-        } else if (value <= 80) {
-            label.textContent = 'Normal';
-        } else {
-            label.textContent = 'Loose';
-        }
-    }
-
-    /**
-     * Update branch point visibility based on parent selection.
-     */
-    updateBranchPointVisibility() {
-        const branchGroup = document.getElementById('branch-point-group');
-        if (this.selectedMessage) {
-            branchGroup.classList.remove('hidden');
-        } else {
-            branchGroup.classList.add('hidden');
-        }
-    }
 
     /**
      * Collect spiral preferences from form inputs or drawn parameters.
      * @returns {Object|null} Spiral preferences or null if all auto
      */
     collectSpiralPreferences() {
-        // If we have drawn parameters, use those
         if (this.drawnSpiralParams) {
             return { ...this.drawnSpiralParams };
         }
-
-        // Otherwise fall back to slider values
-        const prefs = {};
-
-        // Branch point (only if parent selected and user modified)
-        const branchSlider = document.getElementById('branch-point');
-        if (this.selectedMessage && branchSlider.dataset.modified === 'true') {
-            prefs.branchT = parseInt(branchSlider.value) / 100;
-        }
-
-        // Curvature direction
-        const curvDir = document.querySelector('input[name="curv-dir"]:checked').value;
-        if (curvDir !== 'auto') {
-            prefs.curvatureDir = curvDir;
-        }
-
-        // Curvature tightness (only if user modified)
-        const tightnessSlider = document.getElementById('curv-tightness');
-        if (tightnessSlider.dataset.modified === 'true') {
-            prefs.curvatureTightness = parseInt(tightnessSlider.value) / 100;
-        }
-
-        return Object.keys(prefs).length > 0 ? prefs : null;
+        return null;
     }
 
     /**
@@ -1146,6 +967,7 @@ class NomaiApp {
             await this.loadThreads();
             document.getElementById('thread-selector').value = thread.id;
             await this.loadThread(thread.id);
+            this.showMessageModal(); // prompt for root message
         } catch (err) {
             console.error('Failed to create thread:', err);
         }
@@ -1161,24 +983,11 @@ class NomaiApp {
         }
 
         document.getElementById('message-modal').classList.remove('hidden');
-        document.getElementById('writer-input').value = this.lastWriterName;
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
 
-        // Update parent selection display
-        this.updateParentSelection(this.selectedMessage);
-
-        // Reset spiral settings to defaults
-        this.resetSpiralSettings();
-
-        // Show/hide branch point based on parent selection
-        this.updateBranchPointVisibility();
-
-        // Clear any drawn params (using sliders instead)
+        // Clear any drawn params
         this.drawnSpiralParams = null;
-
-        // Update hint
-        this.updateDrawingHint('Use sliders below, or cancel and double-click a spiral to draw (drag for length, scroll for curl)');
     }
 
     /**
@@ -1197,16 +1006,13 @@ class NomaiApp {
      * Handle message creation.
      */
     async handleCreateMessage() {
-        const writerName = document.getElementById('writer-input').value.trim();
+        const writerName = document.getElementById('current-username').textContent.trim();
         const content = document.getElementById('content-input').value.trim();
 
-        if (!writerName || !content) {
-            alert('Please fill in both writer name and content');
+        if (!content) {
+            alert('Please enter a message');
             return;
         }
-
-        // Cache writer name for next message
-        this.lastWriterName = writerName;
 
         const parentId = this.selectedMessage ? this.selectedMessage.id : null;
         const spiralPrefs = this.collectSpiralPreferences();

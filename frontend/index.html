@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nomai Thread Viewer</title>
-    <link rel="stylesheet" href="/css/styles.css?v=18">
+    <link rel="stylesheet" href="/css/styles.css?v=19">
 </head>
 <body>
     <!-- Header with controls -->
@@ -21,9 +21,6 @@
             <input type="file" id="import-file" accept=".json" style="display: none">
             <button id="collaborators-btn" class="btn hidden" title="Manage collaborators">Collaborators</button>
             <button id="clear-thread-btn" class="btn btn-danger">Clear Board</button>
-            <label class="checkbox-label" title="Animate spirals appearing one by one">
-                <input type="checkbox" id="animate-toggle"> Animate
-            </label>
         </div>
         <div id="user-info" class="user-info">
             <button id="friends-btn" class="btn btn-small">Friends <span id="friend-request-badge" class="badge hidden">0</span></button>
@@ -38,8 +35,7 @@
         <!-- Canvas for spiral rendering -->
         <div id="canvas-container">
             <canvas id="spiral-canvas"></canvas>
-            <!-- Floating action button -->
-            <button id="fab-add" title="Add message">+</button>
+
         </div>
 
         <!-- Translation panel (side panel) -->
@@ -61,51 +57,8 @@
             <h3>Add Message</h3>
             <form id="message-form">
                 <div class="form-group">
-                    <label for="writer-input">Writer Name</label>
-                    <input type="text" id="writer-input" placeholder="e.g., Solanum" required>
-                </div>
-                <div class="form-group">
                     <label for="content-input">Message Content</label>
                     <textarea id="content-input" placeholder="Enter your message..." rows="4" required></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Branch from</label>
-                    <div id="parent-selector" class="parent-info">
-                        <span id="selected-parent">Root (new branch)</span>
-                        <button type="button" id="clear-parent-btn" class="btn-small hidden">Clear</button>
-                    </div>
-                    <p id="drawing-hint" class="hint drawing-hint">Click on a spiral to set branch point, then drag to shape</p>
-                </div>
-                <div class="form-group">
-                    <button type="button" id="spiral-settings-toggle" class="btn-small spiral-toggle">
-                        <span class="toggle-arrow">&#9654;</span> Fine-tune Settings
-                    </button>
-                </div>
-                <div id="spiral-settings" class="spiral-settings hidden">
-                    <div class="form-group" id="branch-point-group">
-                        <label for="branch-point">Branch Point</label>
-                        <div class="slider-container">
-                            <input type="range" id="branch-point" min="25" max="90" value="50">
-                            <span id="branch-point-value" class="slider-value">Auto</span>
-                        </div>
-                        <p class="hint">Where on the parent spiral to attach (25% = near start, 90% = near end)</p>
-                    </div>
-                    <div class="form-group">
-                        <label>Curvature Direction</label>
-                        <div class="radio-group">
-                            <label class="radio-label"><input type="radio" name="curv-dir" value="auto" checked> Auto</label>
-                            <label class="radio-label"><input type="radio" name="curv-dir" value="cw"> Clockwise</label>
-                            <label class="radio-label"><input type="radio" name="curv-dir" value="ccw"> Counter-clockwise</label>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="curv-tightness">Curvature Tightness</label>
-                        <div class="slider-container">
-                            <input type="range" id="curv-tightness" min="30" max="100" value="100">
-                            <span id="curv-tightness-value" class="slider-value">Normal</span>
-                        </div>
-                        <p class="hint">How tightly the spiral curls (lower = tighter)</p>
-                    </div>
                 </div>
                 <div class="form-actions">
                     <button type="button" id="cancel-btn" class="btn">Cancel</button>
@@ -205,10 +158,10 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=18"></script>
-    <script src="/js/spiral.js?v=18"></script>
-    <script src="/js/canvas.js?v=18"></script>
-    <script src="/js/interaction.js?v=18"></script>
-    <script src="/js/app.js?v=18"></script>
+    <script src="/js/api.js?v=19"></script>
+    <script src="/js/spiral.js?v=19"></script>
+    <script src="/js/canvas.js?v=19"></script>
+    <script src="/js/interaction.js?v=19"></script>
+    <script src="/js/app.js?v=19"></script>
 </body>
 </html>
