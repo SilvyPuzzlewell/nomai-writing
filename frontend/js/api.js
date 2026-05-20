@@ -210,6 +210,19 @@ const api = {
         return response.json();
     },
 
+    async setDiscordWebhook(url) {
+        const response = await authFetch(`${API_BASE}/auth/me/discord-webhook`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ webhook: url })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to save Discord webhook');
+        }
+        return response.json();
+    },
+
     // =====================================================================
     // Friend methods
     // =====================================================================

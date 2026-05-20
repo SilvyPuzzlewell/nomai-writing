@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nomai Thread Viewer</title>
-    <link rel="stylesheet" href="/css/styles.css?v=19">
+    <link rel="stylesheet" href="/css/styles.css?v=20">
 </head>
 <body>
     <!-- Header with controls -->
@@ -17,14 +17,15 @@
             <button id="regenerate-btn" class="btn hidden" title="Regenerate spiral layout">Regenerate</button>
             <button id="export-btn" class="btn" title="Export thread as JSON">Export</button>
             <button id="import-btn" class="btn" title="Import thread from JSON">Import</button>
-            <button id="notify-btn" class="btn" title="Notify Discord that this thread was updated">Notify</button>
+            <button id="notify-btn" class="btn hidden" title="Notify Discord that this thread was updated">Notify</button>
             <input type="file" id="import-file" accept=".json" style="display: none">
             <button id="collaborators-btn" class="btn hidden" title="Manage collaborators">Collaborators</button>
             <button id="clear-thread-btn" class="btn btn-danger">Clear Board</button>
         </div>
         <div id="user-info" class="user-info">
-            <button id="friends-btn" class="btn btn-small">Friends <span id="friend-request-badge" class="badge hidden">0</span></button>
             <span id="current-username" class="username-display"></span>
+            <button id="friends-btn" class="btn btn-small">Friends <span id="friend-request-badge" class="badge hidden">0</span></button>
+            <button id="settings-btn" class="btn btn-small" title="Set your Discord webhook">Settings</button>
             <button id="logout-btn" class="btn btn-small">Logout</button>
         </div>
         <h1 class="header-title">Nomai Text</h1>
@@ -158,10 +159,28 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=19"></script>
-    <script src="/js/spiral.js?v=19"></script>
-    <script src="/js/canvas.js?v=19"></script>
-    <script src="/js/interaction.js?v=19"></script>
-    <script src="/js/app.js?v=19"></script>
+    <!-- Settings modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+            <h3>Settings</h3>
+            <form id="settings-form">
+                <div class="form-group">
+                    <label for="discord-webhook-input">Your Discord webhook URL</label>
+                    <input type="text" id="discord-webhook-input" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+                    <p class="hint">Collaborators can ping this webhook from your shared threads. Leave empty to disable.</p>
+                </div>
+                <div class="form-actions">
+                    <button type="button" id="settings-close-btn" class="btn">Close</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/js/api.js?v=20"></script>
+    <script src="/js/spiral.js?v=20"></script>
+    <script src="/js/canvas.js?v=20"></script>
+    <script src="/js/interaction.js?v=20"></script>
+    <script src="/js/app.js?v=20"></script>
 </body>
 </html>

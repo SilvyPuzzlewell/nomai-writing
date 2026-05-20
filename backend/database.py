@@ -38,6 +38,7 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                discord_webhook TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -94,6 +95,11 @@ def init_db():
         # Add user_id column to threads if it doesn't exist (migration)
         try:
             conn.execute('ALTER TABLE threads ADD COLUMN user_id INTEGER')
+        except (sqlite3.OperationalError, ValueError):
+            pass
+        # Add discord_webhook column to users if it doesn't exist (migration)
+        try:
+            conn.execute('ALTER TABLE users ADD COLUMN discord_webhook TEXT')
         except (sqlite3.OperationalError, ValueError):
             pass
         # Add share_token column to threads if it doesn't exist (migration)
@@ -182,15 +188,44 @@ def get_user_by_id(user_id):
     """Look up a user by ID."""
     with get_connection() as conn:
         cursor = conn.execute(
-            'SELECT id, username FROM users WHERE id = ?',
+            'SELECT id, username, discord_webhook FROM users WHERE id = ?',
             (user_id,)
         )
         row = cursor.fetchone()
         if not row:
             return None
         if TURSO_DATABASE_URL:
-            return row_to_dict(['id', 'username'], row)
+            return row_to_dict(['id', 'username', 'discord_webhook'], row)
         return dict(row)
+
+def set_user_discord_webhook(user_id, webhook):
+    """Set (or clear, when empty) the user's personal Discord webhook URL."""
+    value = (webhook or '').strip() or None
+    with get_connection() as conn:
+        conn.execute(
+            'UPDATE users SET discord_webhook = ? WHERE id = ?',
+            (value, user_id)
+        )
+
+def get_thread_notify_targets(thread_id, exclude_user_id):
+    """Return discord_webhook URLs for all thread participants (owner +
+    collaborators) except exclude_user_id, skipping those without a webhook."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT u.discord_webhook
+            FROM users u
+            WHERE u.id != ?
+              AND u.discord_webhook IS NOT NULL
+              AND u.discord_webhook != ''
+              AND (
+                u.id = (SELECT user_id FROM threads WHERE id = ?)
+                OR u.id IN (
+                    SELECT user_id FROM thread_collaborators WHERE thread_id = ?
+                )
+              )
+        ''', (exclude_user_id, thread_id, thread_id))
+        rows = cursor.fetchall()
+        return [row[0] for row in rows]
 
 def claim_orphan_threads(user_id):
     """Assign all threads with user_id IS NULL to the given user."""

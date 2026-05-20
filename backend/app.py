@@ -195,6 +195,19 @@ def get_me():
         return jsonify({'error': 'User not found'}), 401
     return jsonify(user)
 
+@app.route('/api/auth/me/discord-webhook', methods=['PUT'])
+@login_required
+def set_discord_webhook():
+    """Set or clear the current user's personal Discord webhook URL."""
+    data = request.get_json() or {}
+    webhook = (data.get('webhook') or '').strip()
+
+    if webhook and not (webhook.startswith('https://') and 'discord' in webhook):
+        return jsonify({'error': 'Enter a valid Discord webhook URL'}), 400
+
+    database.set_user_discord_webhook(get_current_user(), webhook)
+    return jsonify({'success': True})
+
 # =========================================================================
 # Thread endpoints
 # =========================================================================
@@ -372,47 +385,55 @@ def import_thread():
 @app.route('/api/threads/<int:thread_id>/notify-discord', methods=['POST'])
 @login_required
 def notify_discord(thread_id):
-    """Send a Discord notification that a thread was updated. Owner only."""
-    allowed, is_owner = check_thread_access(thread_id)
-    if not allowed or not is_owner:
+    """Notify the other thread participants via their personal Discord webhooks."""
+    allowed, _ = check_thread_access(thread_id)
+    if not allowed:
         return jsonify({'error': 'Access denied'}), 403
-
-    webhook_url = os.environ.get('DISCORD_WEBHOOK_URL')
-    if not webhook_url:
-        return jsonify({'error': 'Discord webhook URL not configured'}), 400
 
     thread = database.get_thread_with_messages(thread_id)
     if thread is None:
         return jsonify({'error': 'Thread not found'}), 404
 
+    targets = database.get_thread_notify_targets(thread_id, get_current_user())
+    if not targets:
+        return jsonify({
+            'success': False,
+            'notified': 0,
+            'message': 'No other participant has a Discord webhook set up'
+        })
+
     message_count = len(thread.get('messages', []))
-    embed = {
+    payload = json.dumps({
         "embeds": [{
             "title": thread['title'],
             "description": f"Thread has been updated ({message_count} messages)",
             "color": 0x00CCCC
         }]
-    }
+    }).encode('utf-8')
 
-    try:
-        req = urllib.request.Request(
-            webhook_url,
-            data=json.dumps(embed).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'NomaiThreadViewer/1.0',
-            },
-            method='POST'
-        )
-        response = urllib.request.urlopen(req)
-        return jsonify({'success': True})
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        logger.error(f"Discord webhook HTTP error {e.code}: {body}")
-        return jsonify({'error': f'Discord returned HTTP {e.code}'}), 502
-    except Exception as e:
-        logger.error(f"Failed to send Discord notification: {e}")
-        return jsonify({'error': 'Failed to send Discord notification'}), 500
+    notified = 0
+    for webhook_url in targets:
+        try:
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'NomaiThreadViewer/1.0',
+                },
+                method='POST'
+            )
+            urllib.request.urlopen(req)
+            notified += 1
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='replace')
+            logger.error(f"Discord webhook HTTP error {e.code}: {body}")
+        except Exception as e:
+            logger.error(f"Failed to send Discord notification: {e}")
+
+    if notified == 0:
+        return jsonify({'error': 'Failed to send Discord notification'}), 502
+    return jsonify({'success': True, 'notified': notified})
 
 # =========================================================================
 # Friend endpoints
@@ -561,6 +582,14 @@ def debug_info():
         'turso_url_prefix': os.environ.get('TURSO_DATABASE_URL', '')[:30] + '...' if os.environ.get('TURSO_DATABASE_URL') else None,
         'database_path': os.environ.get('DATABASE_PATH'),
         'using_turso': bool(database.TURSO_DATABASE_URL)
+    })
+
+@app.route('/api/config', methods=['GET'])
+@login_required
+def get_config():
+    """Return client-relevant feature flags."""
+    return jsonify({
+        'discord_configured': bool(os.environ.get('DISCORD_WEBHOOK_URL'))
     })
 
 if __name__ == '__main__':

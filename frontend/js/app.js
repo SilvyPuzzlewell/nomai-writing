@@ -226,6 +226,54 @@ class NomaiApp {
         document.getElementById('collaborators-close-btn').addEventListener('click', () => {
             this.hideCollaboratorsModal();
         });
+
+        // Settings button + modal events
+        document.getElementById('settings-btn').addEventListener('click', () => {
+            this.showSettingsModal();
+        });
+        document.getElementById('settings-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'settings-modal') this.hideSettingsModal();
+        });
+        document.getElementById('settings-close-btn').addEventListener('click', () => {
+            this.hideSettingsModal();
+        });
+        document.getElementById('settings-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.handleSaveSettings();
+        });
+    }
+
+    /**
+     * Show the settings modal, pre-filled with the user's Discord webhook.
+     */
+    async showSettingsModal() {
+        const input = document.getElementById('discord-webhook-input');
+        input.value = '';
+        document.getElementById('settings-modal').classList.remove('hidden');
+        try {
+            const me = await api.getMe();
+            if (me && me.discord_webhook) input.value = me.discord_webhook;
+        } catch (err) {
+            // Leave the field empty on failure
+        }
+    }
+
+    hideSettingsModal() {
+        document.getElementById('settings-modal').classList.add('hidden');
+    }
+
+    /**
+     * Save the user's personal Discord webhook URL.
+     */
+    async handleSaveSettings() {
+        const url = document.getElementById('discord-webhook-input').value.trim();
+        try {
+            await api.setDiscordWebhook(url);
+            this.hideSettingsModal();
+            alert(url ? 'Discord webhook saved.' : 'Discord webhook cleared.');
+        } catch (err) {
+            alert('Failed to save: ' + err.message);
+        }
     }
 
     /**
@@ -274,6 +322,14 @@ class NomaiApp {
 
             // Show collaborators button when a thread is selected
             document.getElementById('collaborators-btn').classList.remove('hidden');
+
+            // Notify button is active only when the thread is shared with someone
+            try {
+                const collabs = await api.getThreadCollaborators(threadId);
+                document.getElementById('notify-btn').classList.toggle('hidden', collabs.length === 0);
+            } catch (err) {
+                document.getElementById('notify-btn').classList.add('hidden');
+            }
 
             // Use progressive reveal - only roots visible initially
             this.canvas.setMessagesProgressiveReveal(thread.messages, (layouts) => {
@@ -610,6 +666,7 @@ class NomaiApp {
         this.clearSelection();
         document.getElementById('thread-selector').value = '';
         document.getElementById('collaborators-btn').classList.add('hidden');
+        document.getElementById('notify-btn').classList.add('hidden');
     }
 
     /**
@@ -720,8 +777,13 @@ class NomaiApp {
         }
 
         try {
-            await api.notifyDiscord(this.currentThreadId);
-            alert('Discord notification sent!');
+            const result = await api.notifyDiscord(this.currentThreadId);
+            if (result.success) {
+                const n = result.notified || 0;
+                alert(`Discord notification sent to ${n} ${n === 1 ? 'person' : 'people'}.`);
+            } else {
+                alert(result.message || 'No one was notified.');
+            }
         } catch (err) {
             alert('Failed to notify Discord: ' + err.message);
         }
