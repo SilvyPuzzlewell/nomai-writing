@@ -28,9 +28,15 @@ class InteractionHandler {
         this.onSpiralConfirm = callbacks.onSpiralConfirm || (() => {});
         this.onDrawingCancel = callbacks.onDrawingCancel || (() => {});
 
-        this.hitThreshold = 12; // pixels
+        this.hitThreshold = 12; // screen pixels (divided by camera scale for world-space tests)
         this.isMouseDown = false;
         this.activeMessage = null;
+
+        // Pan/zoom gesture state (screen coordinates)
+        this.panSession = null; // { startX, startY, lastX, lastY, moved }
+        this.holdStartScreen = null; // where a translate-hold began
+        this.holdCancelDistance = 8; // screen px of drag that cancels a hold
+        this.pinchDist = null; // last two-finger distance for pinch zoom
 
         // Drawing state machine
         this.drawingState = InteractionHandler.STATE_IDLE;
@@ -70,20 +76,40 @@ class InteractionHandler {
             }
         });
 
-        // Touch support
+        // Touch support (single finger maps to mouse; two fingers pinch-zoom)
         canvasEl.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            const touch = e.touches[0];
-            this.handleMouseDown(touch);
+            if (e.touches.length === 2) {
+                // Entering pinch: release any hold/pan in progress
+                if (this.activeMessage && this.isMouseDown) {
+                    this.onMouseUp(this.activeMessage);
+                }
+                this.activeMessage = null;
+                this.holdStartScreen = null;
+                this.panSession = null;
+                this.isMouseDown = false;
+                this.pinchDist = this.touchDistance(e.touches);
+                return;
+            }
+            this.handleMouseDown(e.touches[0]);
         });
         canvasEl.addEventListener('touchend', (e) => {
             e.preventDefault();
+            if (e.touches.length < 2) this.pinchDist = null;
             this.handleMouseUp();
         });
         canvasEl.addEventListener('touchmove', (e) => {
             e.preventDefault();
-            const touch = e.touches[0];
-            this.handleMouseMove(touch);
+            if (e.touches.length === 2 && this.drawingState === InteractionHandler.STATE_IDLE) {
+                const dist = this.touchDistance(e.touches);
+                if (this.pinchDist) {
+                    const mid = this.touchMidpoint(e.touches);
+                    this.canvas.zoomAt(mid.x, mid.y, dist / this.pinchDist);
+                }
+                this.pinchDist = dist;
+                return;
+            }
+            this.handleMouseMove(e.touches[0]);
         });
 
         // Mouse wheel for curvature control during spiral drawing
@@ -91,9 +117,19 @@ class InteractionHandler {
     }
 
     /**
-     * Get canvas coordinates from event.
+     * Get world coordinates from event (through the camera).
+     * All hit tests, drawing gestures and previews operate in world space.
      */
     getCanvasCoords(event) {
+        const screen = this.getScreenCoords(event);
+        return this.canvas.screenToWorld(screen.x, screen.y);
+    }
+
+    /**
+     * Get raw screen (canvas CSS pixel) coordinates from event.
+     * Used for pan deltas, zoom anchors and gesture thresholds.
+     */
+    getScreenCoords(event) {
         const rect = this.canvas.canvas.getBoundingClientRect();
         return {
             x: event.clientX - rect.left,
@@ -102,22 +138,49 @@ class InteractionHandler {
     }
 
     /**
+     * Distance between two touches (screen px).
+     */
+    touchDistance(touches) {
+        return Math.hypot(
+            touches[0].clientX - touches[1].clientX,
+            touches[0].clientY - touches[1].clientY
+        );
+    }
+
+    /**
+     * Midpoint of two touches in canvas screen coordinates.
+     */
+    touchMidpoint(touches) {
+        const rect = this.canvas.canvas.getBoundingClientRect();
+        return {
+            x: (touches[0].clientX + touches[1].clientX) / 2 - rect.left,
+            y: (touches[0].clientY + touches[1].clientY) / 2 - rect.top
+        };
+    }
+
+    /**
      * Find which message spiral is at a given point.
      */
     findMessageAtPoint(x, y) {
+        // World-space threshold: constant hit feel in screen pixels at any zoom
+        const threshold = this.hitThreshold / this.canvas.camera.scale;
+
         for (const msg of this.canvas.messages) {
             if (!msg.spiralData) continue;
+            // Only hit-test visible spirals (progressive reveal hides children)
+            if (this.canvas.visibleMessageIds.size > 0 &&
+                !this.canvas.visibleMessageIds.has(msg.id)) continue;
 
             for (const point of msg.spiralData.points) {
                 const dist = Math.hypot(x - point.x, y - point.y);
-                if (dist <= this.hitThreshold) {
+                if (dist <= threshold) {
                     return msg;
                 }
             }
 
             // Also check endpoint
             const endDist = Math.hypot(x - msg.spiralData.endX, y - msg.spiralData.endY);
-            if (endDist <= this.hitThreshold + 4) {
+            if (endDist <= threshold + 4 / this.canvas.camera.scale) {
                 return msg;
             }
         }
@@ -156,13 +219,14 @@ class InteractionHandler {
     findPointOnSpiral(x, y) {
         let bestResult = null;
         let bestDist = Infinity;
+        const threshold = this.hitThreshold / this.canvas.camera.scale;
 
         for (const msg of this.canvas.messages) {
             if (!msg.spiralData) continue;
 
             for (const point of msg.spiralData.points) {
                 const dist = Math.hypot(x - point.x, y - point.y);
-                if (dist <= this.hitThreshold && dist < bestDist) {
+                if (dist <= threshold && dist < bestDist) {
                     bestDist = dist;
                     bestResult = {
                         message: msg,
@@ -219,11 +283,12 @@ class InteractionHandler {
     handleMouseDown(event) {
         this.isMouseDown = true;
         const coords = this.getCanvasCoords(event);
+        const screen = this.getScreenCoords(event);
 
         // State machine handling
         switch (this.drawingState) {
             case InteractionHandler.STATE_IDLE:
-                this.handleIdleClick(coords);
+                this.handleIdleClick(coords, screen);
                 break;
 
             case InteractionHandler.STATE_SELECTING_BRANCH:
@@ -241,8 +306,8 @@ class InteractionHandler {
     /**
      * Handle click in idle state.
      */
-    handleIdleClick(coords) {
-        const isDouble = this.isDoubleClick(coords);
+    handleIdleClick(coords, screen) {
+        const isDouble = this.isDoubleClick(screen);
         const message = this.findMessageAtPoint(coords.x, coords.y);
 
         if (isDouble && message) {
@@ -258,15 +323,25 @@ class InteractionHandler {
             this.canvas.setSelected(message.id);
             this.onBranchPointMove(message, this.branchPoint, this.branchT);
             this.canvas.canvas.style.cursor = 'crosshair';
+        } else if (isDouble) {
+            // Double-click on empty space → fit everything into view
+            this.canvas.fitToContent();
         } else if (message) {
             // Single click → normal selection/translation
             this.activeMessage = message;
+            this.holdStartScreen = screen;
             this.canvas.setSelected(message.id);
             this.onSelect(message);
             this.onMouseDown(message);
         } else {
-            this.canvas.setSelected(null);
-            this.onSelect(null);
+            // Empty space → pan candidate. Deselect happens on mouseup only
+            // if the pointer didn't drag (so panning keeps the selection).
+            this.panSession = {
+                startX: screen.x, startY: screen.y,
+                lastX: screen.x, lastY: screen.y,
+                moved: false
+            };
+            this.canvas.canvas.style.cursor = 'grabbing';
         }
     }
 
@@ -309,10 +384,21 @@ class InteractionHandler {
      * Handle mouse up.
      */
     handleMouseUp(event) {
+        if (this.panSession) {
+            if (!this.panSession.moved) {
+                // Plain click on empty space: deselect
+                this.canvas.setSelected(null);
+                this.onSelect(null);
+            }
+            this.panSession = null;
+            this.canvas.canvas.style.cursor = 'default';
+        }
+
         if (this.isMouseDown && this.activeMessage &&
             this.drawingState === InteractionHandler.STATE_IDLE) {
             this.onMouseUp(this.activeMessage);
         }
+        this.holdStartScreen = null;
         this.isMouseDown = false;
     }
 
@@ -321,6 +407,7 @@ class InteractionHandler {
      */
     handleMouseMove(event) {
         const coords = this.getCanvasCoords(event);
+        const screen = this.getScreenCoords(event);
 
         switch (this.drawingState) {
             case InteractionHandler.STATE_SELECTING_BRANCH:
@@ -332,7 +419,7 @@ class InteractionHandler {
                 break;
 
             default:
-                this.handleIdleMove(coords);
+                this.handleIdleMove(coords, screen);
                 break;
         }
     }
@@ -346,7 +433,7 @@ class InteractionHandler {
             coords.x, coords.y, this.parentMessage
         );
 
-        if (pointInfo && pointInfo.distance < 100) {
+        if (pointInfo && pointInfo.distance < 100 / this.canvas.camera.scale) {
             this.branchPoint = pointInfo.point;
             this.branchT = pointInfo.branchT;
             this.onBranchPointMove(this.parentMessage, this.branchPoint, this.branchT);
@@ -383,7 +470,48 @@ class InteractionHandler {
     /**
      * Handle mouse move in idle state.
      */
-    handleIdleMove(coords) {
+    handleIdleMove(coords, screen) {
+        // Active pan drag
+        if (this.panSession && this.isMouseDown) {
+            const dx = screen.x - this.panSession.lastX;
+            const dy = screen.y - this.panSession.lastY;
+            this.panSession.lastX = screen.x;
+            this.panSession.lastY = screen.y;
+
+            if (!this.panSession.moved) {
+                const total = Math.hypot(
+                    screen.x - this.panSession.startX,
+                    screen.y - this.panSession.startY
+                );
+                if (total > 4) this.panSession.moved = true;
+            }
+
+            this.canvas.panBy(dx, dy);
+            this.canvas.canvas.style.cursor = 'grabbing';
+            return;
+        }
+
+        // Holding on a spiral: a real drag cancels the hold (progress is
+        // preserved by the pause) and converts into a pan
+        if (this.isMouseDown && this.activeMessage && this.holdStartScreen) {
+            const dist = Math.hypot(
+                screen.x - this.holdStartScreen.x,
+                screen.y - this.holdStartScreen.y
+            );
+            if (dist > this.holdCancelDistance) {
+                this.onMouseUp(this.activeMessage);
+                this.activeMessage = null;
+                this.holdStartScreen = null;
+                this.panSession = {
+                    startX: screen.x, startY: screen.y,
+                    lastX: screen.x, lastY: screen.y,
+                    moved: true
+                };
+                this.canvas.canvas.style.cursor = 'grabbing';
+            }
+            return;
+        }
+
         const message = this.findMessageAtPoint(coords.x, coords.y);
         const newHoveredId = message ? message.id : null;
 
@@ -398,31 +526,48 @@ class InteractionHandler {
      */
     handleMouseLeave() {
         if (this.drawingState === InteractionHandler.STATE_IDLE) {
+            // Pause any hold in progress - mouseup outside the canvas would
+            // otherwise leave the translation running forever
+            if (this.isMouseDown && this.activeMessage) {
+                this.onMouseUp(this.activeMessage);
+            }
+            this.activeMessage = null;
+            this.holdStartScreen = null;
+            this.panSession = null;
+            this.isMouseDown = false;
             this.canvas.setHovered(null);
             this.onHover(null);
+            this.canvas.canvas.style.cursor = 'default';
         }
     }
 
     /**
-     * Handle mouse wheel - adjust curvature during spiral drawing.
+     * Handle mouse wheel - zoom in idle mode, curvature during spiral drawing.
      */
     handleWheel(event) {
-        if (this.drawingState !== InteractionHandler.STATE_DRAWING_SPIRAL) {
-            return; // Only handle wheel during spiral drawing
-        }
-
         event.preventDefault();
 
-        // Adjust curvature based on wheel delta
-        const delta = event.deltaY > 0 ? -0.05 : 0.05;
-        this.previewCurvature = Math.max(0.1, Math.min(1.0, this.previewCurvature + delta));
+        if (this.drawingState === InteractionHandler.STATE_DRAWING_SPIRAL) {
+            // Adjust curvature based on wheel delta
+            const delta = event.deltaY > 0 ? -0.05 : 0.05;
+            this.previewCurvature = Math.max(0.1, Math.min(1.0, this.previewCurvature + delta));
 
-        // Get current mouse position and update preview
-        const coords = this.getCanvasCoords(event);
-        this.onSpiralPreview(this.branchPoint, coords, this.gesturePath, {
-            curvature: this.previewCurvature,
-            curvatureDir: this.previewCurvatureDir
-        });
+            // Get current mouse position and update preview
+            const coords = this.getCanvasCoords(event);
+            this.onSpiralPreview(this.branchPoint, coords, this.gesturePath, {
+                curvature: this.previewCurvature,
+                curvatureDir: this.previewCurvatureDir
+            });
+            return;
+        }
+
+        if (this.drawingState === InteractionHandler.STATE_SELECTING_BRANCH) {
+            return; // No wheel action while picking a branch point
+        }
+
+        // Idle: zoom centered on the cursor
+        const screen = this.getScreenCoords(event);
+        this.canvas.zoomAt(screen.x, screen.y, event.deltaY < 0 ? 1.1 : 1 / 1.1);
     }
 
     /**

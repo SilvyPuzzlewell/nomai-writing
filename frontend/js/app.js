@@ -1,6 +1,19 @@
 /**
  * Main application controller.
  */
+
+// Translation panel copy (single source so the strings can't drift apart)
+const COPY_HOLD_TO_TRANSLATE = 'Hold on a spiral to translate it…';
+const COPY_PANEL_EMPTY = `
+    <div class="panel-empty">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0"
+                  fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <p>Select a glyph to begin</p>
+        <p class="hint">Hold a spiral to translate it.<br>Double-click one to write a reply.</p>
+    </div>`;
+
 class NomaiApp {
     constructor() {
         this.canvas = null;
@@ -58,13 +71,19 @@ class NomaiApp {
             if (threadId) {
                 document.getElementById('thread-selector').value = threadId;
                 await this.loadThread(threadId);
-                window.history.replaceState({}, '', '/');
+                // Strip the thread param but keep the debug flag alive
+                window.history.replaceState({}, '', window.NOMAI_DEBUG ? '/?debug=1' : '/');
             }
         }
 
         // Start polling for friend request badge
         this.updateFriendBadge();
         this.badgeInterval = setInterval(() => this.updateFriendBadge(), 30000);
+
+        // Re-render once the heading webfont is ready (canvas text uses it)
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(() => this.canvas.render());
+        }
     }
 
     /**
@@ -241,6 +260,34 @@ class NomaiApp {
             e.preventDefault();
             this.handleSaveSettings();
         });
+
+        // Canvas view controls
+        document.getElementById('zoom-in-btn').addEventListener('click', () => {
+            this.canvas.zoomAt(this.canvas.width / 2, this.canvas.height / 2, 1.25);
+        });
+        document.getElementById('zoom-out-btn').addEventListener('click', () => {
+            this.canvas.zoomAt(this.canvas.width / 2, this.canvas.height / 2, 1 / 1.25);
+        });
+        document.getElementById('fit-view-btn').addEventListener('click', () => {
+            this.canvas.fitToContent();
+        });
+
+        // Escape closes the topmost open modal (drawing mode has its own Escape
+        // handler, and a modal is never open while drawing)
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (this.interaction && this.interaction.isDrawing()) return;
+            const hideFns = {
+                'message-modal': () => this.hideMessageModal(),
+                'thread-modal': () => this.hideThreadModal(),
+                'collision-modal': () => this.hideCollisionModal(),
+                'friends-modal': () => this.hideFriendsModal(),
+                'collaborators-modal': () => this.hideCollaboratorsModal(),
+                'settings-modal': () => this.hideSettingsModal()
+            };
+            const open = document.querySelector('.modal:not(.hidden)');
+            if (open && hideFns[open.id]) hideFns[open.id]();
+        });
     }
 
     /**
@@ -270,9 +317,9 @@ class NomaiApp {
         try {
             await api.setDiscordWebhook(url);
             this.hideSettingsModal();
-            alert(url ? 'Discord webhook saved.' : 'Discord webhook cleared.');
+            toast.success(url ? 'Discord webhook saved.' : 'Discord webhook cleared.');
         } catch (err) {
-            alert('Failed to save: ' + err.message);
+            toast.error('Failed to save: ' + err.message);
         }
     }
 
@@ -300,6 +347,7 @@ class NomaiApp {
             }
         } catch (err) {
             console.error('Failed to load threads:', err);
+            toast.error(err.message);
         }
     }
 
@@ -311,8 +359,11 @@ class NomaiApp {
         try {
             const thread = await api.getThread(threadId);
 
+            // Reloading the same thread (e.g. after adding a message) keeps the camera still
+            const sameThread = this.currentThreadId === threadId;
+
             // Only clear translation state when switching to a different thread
-            if (this.currentThreadId !== threadId) {
+            if (!sameThread) {
                 this.canvas.clearTranslated();
                 // Restore saved translation state from localStorage
                 this.loadTranslationState(threadId);
@@ -338,11 +389,12 @@ class NomaiApp {
             }, (messageId) => {
                 // Called when a message finishes translating - save state
                 this.saveTranslationState();
-            });
+            }, sameThread);
 
             this.clearSelection();
         } catch (err) {
             console.error('Failed to load thread:', err);
+            toast.error(err.message);
         }
     }
 
@@ -544,7 +596,7 @@ class NomaiApp {
      */
     showMessageModalWithDrawnSpiral() {
         if (!this.currentThreadId) {
-            alert('Please select or create a thread first');
+            toast.info('Select or create a thread first.');
             this.handleDrawingCancel();
             return;
         }
@@ -652,6 +704,7 @@ class NomaiApp {
             await api.saveLayouts(threadId, layouts);
         } catch (err) {
             console.error('Failed to save layouts:', err);
+            toast.error(err.message);
         }
     }
 
@@ -680,8 +733,10 @@ class NomaiApp {
                 await api.deleteThread(this.currentThreadId);
                 this.clearBoard();
                 await this.loadThreads();
+                toast.success('Thread deleted.');
             } catch (err) {
                 console.error('Failed to delete thread:', err);
+                toast.error(err.message);
             }
         }
     }
@@ -701,6 +756,7 @@ class NomaiApp {
             await this.loadThread(this.currentThreadId);
         } catch (err) {
             console.error('Failed to regenerate layout:', err);
+            toast.error(err.message);
         }
     }
 
@@ -709,7 +765,7 @@ class NomaiApp {
      */
     async handleExport() {
         if (!this.currentThreadId) {
-            alert('Please select a thread to export');
+            toast.info('Select a thread to export first.');
             return;
         }
 
@@ -728,9 +784,10 @@ class NomaiApp {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            toast.success('Thread exported.');
         } catch (err) {
             console.error('Failed to export thread:', err);
-            alert('Failed to export thread');
+            toast.error(err.message);
         }
     }
 
@@ -746,7 +803,7 @@ class NomaiApp {
             const data = JSON.parse(text);
 
             if (!data.title) {
-                alert('Invalid file: missing thread title');
+                toast.error('Invalid file: missing thread title');
                 return;
             }
 
@@ -757,10 +814,10 @@ class NomaiApp {
             document.getElementById('thread-selector').value = thread.id;
             await this.loadThread(thread.id);
 
-            alert(`Imported thread "${thread.title}" with ${thread.messages?.length || 0} messages.\nOnly root messages shown - translate them to reveal children.`);
+            toast.success(`Imported "${thread.title}" (${thread.messages?.length || 0} messages). Translate the roots to reveal replies.`);
         } catch (err) {
             console.error('Failed to import thread:', err);
-            alert('Failed to import thread: ' + err.message);
+            toast.error('Import failed: ' + err.message);
         }
 
         // Reset file input
@@ -772,7 +829,7 @@ class NomaiApp {
      */
     async handleNotifyDiscord() {
         if (!this.currentThreadId) {
-            alert('Please select a thread first');
+            toast.info('Select a thread first.');
             return;
         }
 
@@ -780,12 +837,12 @@ class NomaiApp {
             const result = await api.notifyDiscord(this.currentThreadId);
             if (result.success) {
                 const n = result.notified || 0;
-                alert(`Discord notification sent to ${n} ${n === 1 ? 'person' : 'people'}.`);
+                toast.success(`Discord notification sent to ${n} ${n === 1 ? 'person' : 'people'}.`);
             } else {
-                alert(result.message || 'No one was notified.');
+                toast.info(result.message || 'No one was notified.');
             }
         } catch (err) {
-            alert('Failed to notify Discord: ' + err.message);
+            toast.error('Failed to notify Discord: ' + err.message);
         }
     }
 
@@ -817,8 +874,10 @@ class NomaiApp {
                 await api.deleteMessage(msg.id);
                 this.clearSelection();
                 await this.loadThread(this.currentThreadId);
+                await this.loadThreads();
             } catch (err) {
                 console.error('Failed to delete message:', err);
+                toast.error(err.message);
             }
         }
     }
@@ -885,6 +944,7 @@ class NomaiApp {
         // Already fully translated - show content immediately
         if (this.canvas.translatedIds.has(message.id)) {
             contentEl.innerHTML = `<p>${this.escapeHtml(message.content)}</p>`;
+            this.setTranslationProgress(1);
             return;
         }
 
@@ -896,6 +956,7 @@ class NomaiApp {
 
         // Store current message for tracking
         this.animatingMessageId = message.id;
+        contentEl.classList.add('translating');
 
         const animate = (currentTime) => {
             const elapsed = currentTime - startTime;
@@ -905,12 +966,14 @@ class NomaiApp {
 
             // Show content progressively
             contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, charsToShow))}</p>`;
+            this.setTranslationProgress(progress);
 
             if (progress < 1) {
                 this.textAnimationId = requestAnimationFrame(animate);
             } else {
                 this.textAnimationId = null;
                 this.animatingMessageId = null;
+                contentEl.classList.remove('translating');
             }
         };
 
@@ -925,6 +988,20 @@ class NomaiApp {
             cancelAnimationFrame(this.textAnimationId);
             this.textAnimationId = null;
         }
+        const contentEl = document.getElementById('message-content');
+        if (contentEl) contentEl.classList.remove('translating');
+    }
+
+    /**
+     * Drive the thin progress bar under the panel header.
+     * Hidden at 0 (nothing started) and at 1 (fully translated).
+     */
+    setTranslationProgress(progress) {
+        const track = document.getElementById('translation-progress');
+        const bar = document.getElementById('translation-progress-bar');
+        if (!track || !bar) return;
+        track.classList.toggle('hidden', progress <= 0 || progress >= 1);
+        bar.style.width = `${Math.min(100, Math.round(progress * 100))}%`;
     }
 
     /**
@@ -943,16 +1020,18 @@ class NomaiApp {
             const progress = this.canvas.getTransitionProgress(message.id);
             const contentText = message.content;
             const charsToShow = Math.floor(progress * contentText.length);
+            this.setTranslationProgress(progress);
 
             // Show content up to current progress
             if (charsToShow === 0) {
-                contentEl.innerHTML = '<p class="placeholder">Hold to translate...</p>';
+                contentEl.innerHTML = `<p class="placeholder">${COPY_HOLD_TO_TRANSLATE}</p>`;
             } else {
                 contentEl.innerHTML = `<p>${this.escapeHtml(contentText.slice(0, charsToShow))}</p>`;
             }
         } else {
             writerEl.textContent = '';
-            contentEl.innerHTML = '<p class="placeholder">Click on a spiral to translate...</p>';
+            this.setTranslationProgress(0);
+            contentEl.innerHTML = COPY_PANEL_EMPTY;
         }
     }
 
@@ -1032,6 +1111,7 @@ class NomaiApp {
             this.showMessageModal(); // prompt for root message
         } catch (err) {
             console.error('Failed to create thread:', err);
+            toast.error(err.message);
         }
     }
 
@@ -1040,7 +1120,7 @@ class NomaiApp {
      */
     showMessageModal() {
         if (!this.currentThreadId) {
-            alert('Please select or create a thread first');
+            toast.info('Select or create a thread first.');
             return;
         }
 
@@ -1072,7 +1152,7 @@ class NomaiApp {
         const content = document.getElementById('content-input').value.trim();
 
         if (!content) {
-            alert('Please enter a message');
+            toast.info('Enter a message first.');
             return;
         }
 
@@ -1091,8 +1171,12 @@ class NomaiApp {
 
             // Save translation state after reload
             this.saveTranslationState();
+
+            // Refresh the selector so the message count stays accurate
+            await this.loadThreads();
         } catch (err) {
             console.error('Failed to create message:', err);
+            toast.error(err.message);
         }
     }
 
@@ -1242,7 +1326,7 @@ class NomaiApp {
             }
             btn.disabled = true;
         } catch (err) {
-            alert(err.message);
+            toast.error(err.message);
         }
     }
 
@@ -1253,6 +1337,7 @@ class NomaiApp {
             this.updateFriendBadge();
         } catch (err) {
             console.error('Failed to accept request:', err);
+            toast.error(err.message);
         }
     }
 
@@ -1263,6 +1348,7 @@ class NomaiApp {
             this.updateFriendBadge();
         } catch (err) {
             console.error('Failed to decline request:', err);
+            toast.error(err.message);
         }
     }
 
@@ -1275,6 +1361,7 @@ class NomaiApp {
             await this.loadThreads();
         } catch (err) {
             console.error('Failed to remove friend:', err);
+            toast.error(err.message);
         }
     }
 
@@ -1305,7 +1392,7 @@ class NomaiApp {
 
     async showCollaboratorsModal() {
         if (!this.currentThreadId) {
-            alert('Please select a thread first');
+            toast.info('Select a thread first.');
             return;
         }
 
@@ -1381,7 +1468,7 @@ class NomaiApp {
             await api.addThreadCollaborator(this.currentThreadId, userId);
             await this.loadCollaborators();
         } catch (err) {
-            alert(err.message);
+            toast.error(err.message);
         }
     }
 
@@ -1391,6 +1478,7 @@ class NomaiApp {
             await this.loadCollaborators();
         } catch (err) {
             console.error('Failed to remove collaborator:', err);
+            toast.error(err.message);
         }
     }
 

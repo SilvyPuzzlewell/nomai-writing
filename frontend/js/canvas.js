@@ -29,17 +29,208 @@ class NomaiCanvas {
         this.branchPointMarker = null; // { x, y } for branch point selection mode
         this.branchPointLabel = null; // Text to show near marker (e.g., "45%")
 
-        // Colors
-        this.colors = {
-            curve: '#00d9ff',
-            curveGlow: 'rgba(0, 217, 255, 0.4)',
-            selected: '#888888',
-            selectedGlow: 'rgba(136, 136, 136, 0.5)',
-            endpoint: '#00d9ff'
-        };
+        // Camera - render-only view transform (screen = world * scale + offset).
+        // World coordinates (layouts, hit data, drawing gestures) never change.
+        this.camera = { offsetX: 0, offsetY: 0, scale: 1 };
+        this.minScale = 0.2;
+        this.maxScale = 4;
+
+        // Static starfield background (offscreen canvas, rebuilt on resize)
+        this.starfieldCanvas = null;
+
+        // Colors are read from CSS custom properties so the palette lives in one place
+        this.readThemeColors();
 
         this.resize();
         window.addEventListener('resize', () => this.resize());
+    }
+
+    /**
+     * Read the color palette from CSS custom properties.
+     * Falls back to hardcoded values if the stylesheet isn't loaded.
+     */
+    readThemeColors() {
+        const css = getComputedStyle(document.documentElement);
+        const v = (name, fallback) => (css.getPropertyValue(name) || '').trim() || fallback;
+
+        const curve = v('--curve-color', '#00d9ff');
+        const translated = v('--translated-color', '#8d80b5');
+        const accent = v('--accent-color', '#ff9a3c');
+
+        this.colors = {
+            curve,
+            curveGlow: this.rgba(curve, 0.4),
+            translated,
+            translatedGlow: this.rgba(translated, 0.5),
+            accent,
+            scanline: '#dffaff',
+            endpoint: curve
+        };
+    }
+
+    /**
+     * Parse a 6-digit hex color into { r, g, b }.
+     */
+    hexToRgb(hex) {
+        const c = parseInt(hex.slice(1), 16);
+        return { r: (c >> 16) & 255, g: (c >> 8) & 255, b: c & 255 };
+    }
+
+    /**
+     * Build an rgba() string from a hex color and alpha.
+     */
+    rgba(hex, alpha) {
+        const { r, g, b } = this.hexToRgb(hex);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    /**
+     * Interpolate between two hex colors, returning rgba() with the given alpha.
+     */
+    lerpRgba(hexA, hexB, t, alpha) {
+        const a = this.hexToRgb(hexA);
+        const b = this.hexToRgb(hexB);
+        const r = Math.round(a.r + (b.r - a.r) * t);
+        const g = Math.round(a.g + (b.g - a.g) * t);
+        const bl = Math.round(a.b + (b.b - a.b) * t);
+        return `rgba(${r}, ${g}, ${bl}, ${alpha})`;
+    }
+
+    // =========================================================================
+    // Camera
+    // =========================================================================
+
+    /**
+     * Convert screen (canvas CSS pixel) coordinates to world coordinates.
+     */
+    screenToWorld(x, y) {
+        return {
+            x: (x - this.camera.offsetX) / this.camera.scale,
+            y: (y - this.camera.offsetY) / this.camera.scale
+        };
+    }
+
+    /**
+     * Convert world coordinates to screen coordinates.
+     */
+    worldToScreen(x, y) {
+        return {
+            x: x * this.camera.scale + this.camera.offsetX,
+            y: y * this.camera.scale + this.camera.offsetY
+        };
+    }
+
+    /**
+     * Pan the camera by a screen-space delta.
+     */
+    panBy(dx, dy) {
+        this.camera.offsetX += dx;
+        this.camera.offsetY += dy;
+        this.render();
+    }
+
+    /**
+     * Zoom by a factor, keeping the world point under (screenX, screenY) fixed.
+     */
+    zoomAt(screenX, screenY, factor) {
+        const world = this.screenToWorld(screenX, screenY);
+        const newScale = Math.max(this.minScale, Math.min(this.maxScale, this.camera.scale * factor));
+        this.camera.scale = newScale;
+        this.camera.offsetX = screenX - world.x * newScale;
+        this.camera.offsetY = screenY - world.y * newScale;
+        this.render();
+    }
+
+    /**
+     * Reset the camera to the default view.
+     */
+    resetView() {
+        this.camera = { offsetX: 0, offsetY: 0, scale: 1 };
+        this.render();
+    }
+
+    /**
+     * Fit all spirals (including not-yet-revealed ones, so the view doesn't
+     * jump as children appear) into the viewport.
+     */
+    fitToContent(padding = 70) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        this.messages.forEach(msg => {
+            if (!msg.spiralData || !msg.spiralData.points) return;
+            msg.spiralData.points.forEach(p => {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y > maxY) maxY = p.y;
+            });
+        });
+
+        if (minX === Infinity) {
+            this.resetView();
+            return;
+        }
+
+        const bw = Math.max(maxX - minX, 1);
+        const bh = Math.max(maxY - minY, 1);
+        const fitScale = Math.min((this.width - padding * 2) / bw, (this.height - padding * 2) / bh);
+        const scale = Math.max(this.minScale, Math.min(fitScale, 1.25));
+
+        this.camera.scale = scale;
+        this.camera.offsetX = this.width / 2 - (minX + bw / 2) * scale;
+        this.camera.offsetY = this.height / 2 - (minY + bh / 2) * scale;
+        this.render();
+    }
+
+    // =========================================================================
+    // Starfield background
+    // =========================================================================
+
+    /**
+     * Build the static starfield on an offscreen canvas (called on resize).
+     */
+    buildStarfield() {
+        const w = this.width, h = this.height;
+        if (!w || !h) {
+            this.starfieldCanvas = null;
+            return;
+        }
+
+        const dpr = window.devicePixelRatio || 1;
+        const off = document.createElement('canvas');
+        off.width = Math.max(1, Math.round(w * dpr));
+        off.height = Math.max(1, Math.round(h * dpr));
+        const octx = off.getContext('2d');
+        octx.scale(dpr, dpr);
+
+        const count = Math.round((w * h) / 6000);
+        for (let i = 0; i < count; i++) {
+            const x = Math.random() * w;
+            const y = Math.random() * h;
+            const r = 0.4 + Math.random() * 0.9;
+            const alpha = 0.15 + Math.random() * 0.55;
+
+            // Mostly white stars, with the occasional cyan or warm one
+            const tint = Math.random();
+            let color = `rgba(255, 255, 255, ${alpha})`;
+            if (tint > 0.93) color = `rgba(160, 235, 255, ${alpha})`;
+            else if (tint > 0.87) color = `rgba(255, 205, 160, ${alpha})`;
+
+            octx.beginPath();
+            octx.arc(x, y, r, 0, 2 * Math.PI);
+            octx.fillStyle = color;
+            octx.fill();
+        }
+
+        this.starfieldCanvas = off;
+    }
+
+    /**
+     * Blit the starfield (screen space, fixed - no parallax).
+     */
+    drawStarfield() {
+        if (!this.starfieldCanvas) return;
+        this.ctx.drawImage(this.starfieldCanvas, 0, 0, this.width, this.height);
     }
 
     /**
@@ -71,9 +262,15 @@ class NomaiCanvas {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
 
+        // Rebuild the starfield for the new dimensions
+        this.buildStarfield();
+
         // Re-layout and render if we have messages
         if (this.messages.length > 0) {
             this.relayout();
+            // Relayout re-centers content around the new canvas center, so
+            // refit the camera to keep everything in view
+            this.fitToContent();
         }
         this.render();
     }
@@ -91,7 +288,7 @@ class NomaiCanvas {
         this.useProgressiveReveal = false;
         this.visibleMessageIds = new Set(this.messages.map(m => m.id));
         this.revealedIds = new Set(this.messages.map(m => m.id));
-        this.render();
+        this.fitToContent();
 
         // Check if any messages need their layouts saved
         if (onLayoutsGenerated) {
@@ -115,7 +312,7 @@ class NomaiCanvas {
         this.relayout();
         this.visibleMessageIds = new Set();
         this.useProgressiveReveal = false;
-        this.render();
+        this.fitToContent();
 
         // Get messages in tree order (parents before children)
         const orderedMessages = this.getMessagesInTreeOrder();
@@ -150,7 +347,7 @@ class NomaiCanvas {
      * @param {Function} onLayoutsGenerated - Callback with layouts to save
      * @param {Function} onMessageRevealed - Callback when a message finishes translating
      */
-    setMessagesProgressiveReveal(messages, onLayoutsGenerated = null, onMessageRevealed = null) {
+    setMessagesProgressiveReveal(messages, onLayoutsGenerated = null, onMessageRevealed = null, preserveCamera = false) {
         this.cancelAnimation();
         this.rawMessages = messages;
         this.relayout();
@@ -178,7 +375,11 @@ class NomaiCanvas {
 
         // Show all revealed messages
         this.visibleMessageIds = new Set(this.revealedIds);
-        this.render();
+        if (preserveCamera) {
+            this.render();
+        } else {
+            this.fitToContent();
+        }
 
         // Save layouts
         if (onLayoutsGenerated) {
@@ -405,7 +606,7 @@ class NomaiCanvas {
     }
 
     /**
-     * Draw the branch point marker (green circle with label).
+     * Draw the branch point marker (accent circle with label).
      */
     drawBranchPointMarker() {
         if (!this.branchPointMarker) return;
@@ -414,23 +615,23 @@ class NomaiCanvas {
         ctx.save();
 
         // Draw glow
-        ctx.shadowColor = 'rgba(0, 255, 100, 0.8)';
+        ctx.shadowColor = this.rgba(this.colors.accent, 0.8);
         ctx.shadowBlur = 12;
 
         // Draw marker circle
         ctx.beginPath();
         ctx.arc(this.branchPointMarker.x, this.branchPointMarker.y, 8, 0, 2 * Math.PI);
-        ctx.fillStyle = 'rgba(0, 255, 100, 0.6)';
+        ctx.fillStyle = this.rgba(this.colors.accent, 0.6);
         ctx.fill();
-        ctx.strokeStyle = '#00ff64';
+        ctx.strokeStyle = this.colors.accent;
         ctx.lineWidth = 2;
         ctx.stroke();
 
         // Draw label
         if (this.branchPointLabel) {
             ctx.shadowBlur = 0;
-            ctx.font = 'bold 12px "Segoe UI", sans-serif';
-            ctx.fillStyle = '#00ff64';
+            ctx.font = 'bold 12px "Space Grotesk", "Segoe UI", sans-serif';
+            ctx.fillStyle = this.colors.accent;
             ctx.textAlign = 'left';
             ctx.fillText(this.branchPointLabel, this.branchPointMarker.x + 14, this.branchPointMarker.y + 4);
         }
@@ -450,9 +651,9 @@ class NomaiCanvas {
         ctx.save();
 
         // Draw glow
-        ctx.shadowColor = 'rgba(0, 217, 255, 0.6)';
+        ctx.shadowColor = this.rgba(this.colors.curve, 0.6);
         ctx.shadowBlur = 15;
-        ctx.strokeStyle = 'rgba(0, 217, 255, 0.7)';
+        ctx.strokeStyle = this.rgba(this.colors.curve, 0.7);
         ctx.lineWidth = 3;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
@@ -477,7 +678,7 @@ class NomaiCanvas {
             ctx.setLineDash([]); // Solid for endpoint
             ctx.beginPath();
             ctx.arc(lastPoint.x, lastPoint.y, 5, 0, 2 * Math.PI);
-            ctx.fillStyle = 'rgba(0, 217, 255, 0.7)';
+            ctx.fillStyle = this.rgba(this.colors.curve, 0.7);
             ctx.fill();
         }
 
@@ -486,7 +687,7 @@ class NomaiCanvas {
             ctx.setLineDash([]);
             ctx.beginPath();
             ctx.arc(this.previewBranchPoint.x, this.previewBranchPoint.y, 6, 0, 2 * Math.PI);
-            ctx.strokeStyle = '#00ff00';
+            ctx.strokeStyle = this.colors.accent;
             ctx.lineWidth = 2;
             ctx.stroke();
         }
@@ -501,10 +702,18 @@ class NomaiCanvas {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.width, this.height);
 
+        // Background stars are fixed in screen space (drawn before the camera transform)
+        this.drawStarfield();
+
         if (this.messages.length === 0 && !this.previewSpiral) {
             this.drawEmptyState();
             return;
         }
+
+        // Everything below is drawn in world space through the camera
+        ctx.save();
+        ctx.translate(this.camera.offsetX, this.camera.offsetY);
+        ctx.scale(this.camera.scale, this.camera.scale);
 
         // Draw all spirals (children start at parent endpoints, no connection lines needed)
         this.messages.forEach(msg => {
@@ -526,8 +735,12 @@ class NomaiCanvas {
         // Draw preview spiral on top
         this.drawPreviewSpiral();
 
-        // DEBUG: Draw unexpected coinciding pixels in red
-        this.drawDebugPixels();
+        // DEBUG: Draw unexpected coinciding pixels in red (world coords, opt-in via ?debug=1)
+        if (window.NOMAI_DEBUG) {
+            this.drawDebugPixels();
+        }
+
+        ctx.restore();
     }
 
     /**
@@ -560,11 +773,13 @@ class NomaiCanvas {
      */
     drawEmptyState() {
         const ctx = this.ctx;
-        ctx.fillStyle = 'rgba(136, 136, 136, 0.5)';
-        ctx.font = '16px "Segoe UI", sans-serif';
         ctx.textAlign = 'center';
+        ctx.fillStyle = this.rgba(this.colors.curve, 0.55);
+        ctx.font = '16px "Space Grotesk", "Segoe UI", sans-serif';
         ctx.fillText('Select a thread or create a new one', this.width / 2, this.height / 2);
-        ctx.fillText('Click + to add messages', this.width / 2, this.height / 2 + 30);
+        ctx.fillStyle = 'rgba(152, 162, 184, 0.6)';
+        ctx.font = '13px "Space Grotesk", "Segoe UI", sans-serif';
+        ctx.fillText('Glyphs appear here — hold one to translate it', this.width / 2, this.height / 2 + 28);
     }
 
     /**
@@ -606,18 +821,15 @@ class NomaiCanvas {
         let strokeColor, glowColor;
 
         if (isTranslated) {
-            // Fully translated - grey
-            strokeColor = this.colors.selected;
-            glowColor = this.colors.selectedGlow;
+            // Fully translated - Nomai purple
+            strokeColor = this.colors.translated;
+            glowColor = this.colors.translatedGlow;
         } else if (transitionProgress > 0) {
-            // Transitioning - interpolate from blue to grey
-            strokeColor = this.lerpColor(this.colors.curve, this.colors.selected, transitionProgress);
-            const alpha = 0.4;
-            const grey = Math.round(136 * transitionProgress + 0 * (1 - transitionProgress));
-            const cyan = Math.round(217 * (1 - transitionProgress));
-            glowColor = `rgba(${grey}, ${grey + cyan}, ${255 - (255-136)*transitionProgress}, ${alpha})`;
+            // Transitioning - interpolate from cyan to purple
+            strokeColor = this.lerpColor(this.colors.curve, this.colors.translated, transitionProgress);
+            glowColor = this.lerpRgba(this.colors.curve, this.colors.translated, transitionProgress, 0.4);
         } else {
-            // Not translated - blue
+            // Not translated - cyan
             strokeColor = this.colors.curve;
             glowColor = this.colors.curveGlow;
         }
@@ -625,7 +837,19 @@ class NomaiCanvas {
         // Get the partial path for drawing animations
         const pathToDraw = bezierPath.slice(0, segmentsToDraw);
 
-        // Draw glow effect for selected/hovered
+        // Faint ambient glow so idle glyphs read as luminous writing
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        this.drawBezierPath(pathToDraw);
+        ctx.restore();
+
+        // Draw stronger glow effect for selected/hovered
         if (isSelected || isHovered) {
             ctx.save();
             ctx.shadowColor = glowColor;
@@ -639,9 +863,14 @@ class NomaiCanvas {
         }
 
         // Draw main curve with variable width
-        ctx.strokeStyle = strokeColor;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
+
+        // Translator effect: while transitioning, the glyph is recolored
+        // segment-by-segment from base to tip (like the game's translator tool)
+        const isTransitioning = !isTranslated && !isDrawing &&
+            transitionProgress > 0 && transitionProgress < 1;
+        const frontier = isTransitioning ? transitionProgress * bezierPath.length : -1;
 
         // Draw curve segments with tapering width
         for (let i = 0; i < segmentsToDraw; i++) {
@@ -649,6 +878,10 @@ class NomaiCanvas {
             const progress = i / bezierPath.length;
             // Taper from thick to thin
             const lineWidth = (3.5 - progress * 1.5) * scale;
+
+            ctx.strokeStyle = frontier >= 0
+                ? (i < frontier ? this.colors.translated : this.colors.curve)
+                : strokeColor;
 
             ctx.beginPath();
             ctx.lineWidth = Math.max(1, lineWidth);
@@ -659,6 +892,23 @@ class NomaiCanvas {
                 seg.end.x, seg.end.y
             );
             ctx.stroke();
+        }
+
+        // Bright scanline dot at the translation frontier
+        if (isTransitioning && points.length > 0) {
+            const idx = Math.min(
+                Math.floor(transitionProgress * (points.length - 1)),
+                points.length - 1
+            );
+            const p = points[idx];
+            ctx.save();
+            ctx.shadowColor = this.colors.curveGlow;
+            ctx.shadowBlur = 16;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, Math.max(3, 5 * scale), 0, 2 * Math.PI);
+            ctx.fillStyle = this.colors.scanline;
+            ctx.fill();
+            ctx.restore();
         }
 
         // Draw endpoint marker at the current drawing position

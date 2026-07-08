@@ -1,3 +1,6 @@
+// Debug instrumentation is opt-in via ?debug=1 (pixel-coincidence scan + canvas overlap markers)
+window.NOMAI_DEBUG = new URLSearchParams(window.location.search).has('debug');
+
 /**
  * Sample a point along a cubic Bezier curve at parameter t.
  */
@@ -443,8 +446,10 @@ class TreeLayoutEngine {
             currentAngle += angleAllocation;
         });
 
-        // DEBUG: Check for pixel coincidence across all spirals
-        debugCheckPixelCoincidence(this.allSpirals);
+        // DEBUG: Check for pixel coincidence across all spirals (opt-in via ?debug=1)
+        if (window.NOMAI_DEBUG) {
+            debugCheckPixelCoincidence(this.allSpirals);
+        }
 
         return Array.from(messageMap.values());
     }
@@ -673,9 +678,6 @@ class TreeLayoutEngine {
                     console.warn(`Node ${node.id}: Could not find non-intersecting config after ${variations.length} attempts`);
                 }
             }
-            if (foundNonIntersecting) {
-                console.log(`Node ${node.id}: Found non-intersecting config, allSpirals count: ${this.allSpirals.length}`);
-            }
 
             // Track collision conflict for user notification
             if (userPrefsCollided) {
@@ -853,17 +855,12 @@ function debugCheckPixelCoincidence(spirals) {
         // Get densely sampled points along the Bezier curve
         const sampledPoints = sampleBezierCurve(spiral.points, samplesPerSegment);
 
-        console.log(`Spiral ${spiralIndex} (nodeId=${spiral.nodeId}, parentId=${spiral.parentId}): ${sampledPoints.length} sampled points (skipping first ${skipPoints})`);
-
         // Skip first few points (start/branch area)
         sampledPoints.slice(skipPoints).forEach((point, pointIndex) => {
             // Round to pixel coordinates
             const px = Math.round(point.x);
             const py = Math.round(point.y);
             const key = `${px},${py}`;
-
-            // Log every pixel
-            console.log(`  Spiral ${spiralIndex}, point ${pointIndex + skipPoints}: pixel (${px}, ${py})`);
 
             if (!pixelMap.has(key)) {
                 pixelMap.set(key, []);

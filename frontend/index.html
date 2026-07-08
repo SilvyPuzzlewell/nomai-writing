@@ -4,16 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nomai Thread Viewer</title>
-    <link rel="stylesheet" href="/css/styles.css?v=20">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0' fill='none' stroke='%2300d9ff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/css/styles.css?v=21">
 </head>
 <body>
     <!-- Header with controls -->
     <header id="header">
-        <div class="header-left">
+        <h1 class="header-title">
+            <svg class="title-glyph" viewBox="0 0 48 48" aria-hidden="true">
+                <path d="M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0"
+                      fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+            </svg>
+            Nomai Text
+        </h1>
+        <div class="header-group">
             <select id="thread-selector">
                 <option value="">Select a thread...</option>
             </select>
-            <button id="new-thread-btn" class="btn">New Thread</button>
+            <button id="new-thread-btn" class="btn btn-primary">New Thread</button>
             <button id="regenerate-btn" class="btn hidden" title="Regenerate spiral layout">Regenerate</button>
             <button id="export-btn" class="btn" title="Export thread as JSON">Export</button>
             <button id="import-btn" class="btn" title="Import thread from JSON">Import</button>
@@ -28,7 +36,6 @@
             <button id="settings-btn" class="btn btn-small" title="Set your Discord webhook">Settings</button>
             <button id="logout-btn" class="btn btn-small">Logout</button>
         </div>
-        <h1 class="header-title">Nomai Text</h1>
     </header>
 
     <!-- Main content area -->
@@ -36,26 +43,40 @@
         <!-- Canvas for spiral rendering -->
         <div id="canvas-container">
             <canvas id="spiral-canvas"></canvas>
-
+            <div id="canvas-controls">
+                <button id="zoom-in-btn" class="canvas-control-btn" title="Zoom in" aria-label="Zoom in">+</button>
+                <button id="zoom-out-btn" class="canvas-control-btn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+                <button id="fit-view-btn" class="canvas-control-btn" title="Fit everything in view" aria-label="Fit view">&#8982;</button>
+            </div>
         </div>
 
         <!-- Translation panel (side panel) -->
         <aside id="translation-panel">
             <div id="panel-header">
-                <h2>Translation</h2>
+                <div class="panel-header-row">
+                    <h2>Translation</h2>
+                    <button id="delete-message-btn" class="btn btn-danger btn-small hidden" title="Delete this message">Delete</button>
+                </div>
                 <span id="writer-name"></span>
-                <button id="delete-message-btn" class="btn btn-danger btn-small hidden" title="Delete this message">Delete</button>
+                <div id="translation-progress" class="hidden"><div id="translation-progress-bar"></div></div>
             </div>
             <div id="message-content">
-                <p class="placeholder">Hold on a spiral to translate...<br><span class="hint">Double-click a spiral to add a branching message</span></p>
+                <div class="panel-empty">
+                    <svg viewBox="0 0 48 48" aria-hidden="true">
+                        <path d="M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0"
+                              fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    </svg>
+                    <p>Select a glyph to begin</p>
+                    <p class="hint">Hold a spiral to translate it.<br>Double-click one to write a reply.</p>
+                </div>
             </div>
         </aside>
     </main>
 
     <!-- Message input modal -->
     <div id="message-modal" class="modal hidden">
-        <div class="modal-content">
-            <h3>Add Message</h3>
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
+            <h3 id="message-modal-title">Add Message</h3>
             <form id="message-form">
                 <div class="form-group">
                     <label for="content-input">Message Content</label>
@@ -71,8 +92,8 @@
 
     <!-- New thread modal -->
     <div id="thread-modal" class="modal hidden">
-        <div class="modal-content">
-            <h3>New Thread</h3>
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title">
+            <h3 id="thread-modal-title">New Thread</h3>
             <form id="thread-form">
                 <div class="form-group">
                     <label for="thread-title-input">Thread Title</label>
@@ -94,8 +115,8 @@
 
     <!-- Collision warning modal -->
     <div id="collision-modal" class="modal hidden">
-        <div class="modal-content collision-modal-content">
-            <h3>Spiral Overlap Detected</h3>
+        <div class="modal-content collision-modal-content" role="dialog" aria-modal="true" aria-labelledby="collision-modal-title">
+            <h3 id="collision-modal-title">Spiral Overlap Detected</h3>
             <p>Your spiral settings would cause an overlap with an existing spiral. What would you like to do?</p>
             <div class="form-actions">
                 <button type="button" id="collision-allow-btn" class="btn">Allow Overlap</button>
@@ -106,8 +127,8 @@
 
     <!-- Friends modal -->
     <div id="friends-modal" class="modal hidden">
-        <div class="modal-content friends-modal-content">
-            <h3>Friends</h3>
+        <div class="modal-content friends-modal-content" role="dialog" aria-modal="true" aria-labelledby="friends-modal-title">
+            <h3 id="friends-modal-title">Friends</h3>
             <div class="friends-tabs">
                 <button type="button" class="friends-tab active" data-tab="my-friends">My Friends</button>
                 <button type="button" class="friends-tab" data-tab="requests">Requests <span id="tab-request-badge" class="badge hidden">0</span></button>
@@ -144,8 +165,8 @@
 
     <!-- Collaborators modal -->
     <div id="collaborators-modal" class="modal hidden">
-        <div class="modal-content friends-modal-content">
-            <h3>Collaborators</h3>
+        <div class="modal-content friends-modal-content" role="dialog" aria-modal="true" aria-labelledby="collaborators-modal-title">
+            <h3 id="collaborators-modal-title">Collaborators</h3>
             <div id="collaborators-list" class="friends-list">
                 <p class="hint">Loading...</p>
             </div>
@@ -161,8 +182,8 @@
 
     <!-- Settings modal -->
     <div id="settings-modal" class="modal hidden">
-        <div class="modal-content">
-            <h3>Settings</h3>
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+            <h3 id="settings-modal-title">Settings</h3>
             <form id="settings-form">
                 <div class="form-group">
                     <label for="discord-webhook-input">Your Discord webhook URL</label>
@@ -177,10 +198,11 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=20"></script>
-    <script src="/js/spiral.js?v=20"></script>
-    <script src="/js/canvas.js?v=20"></script>
-    <script src="/js/interaction.js?v=20"></script>
-    <script src="/js/app.js?v=20"></script>
+    <script src="/js/api.js?v=21"></script>
+    <script src="/js/toast.js?v=21"></script>
+    <script src="/js/spiral.js?v=21"></script>
+    <script src="/js/canvas.js?v=21"></script>
+    <script src="/js/interaction.js?v=21"></script>
+    <script src="/js/app.js?v=21"></script>
 </body>
 </html>

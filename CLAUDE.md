@@ -40,7 +40,7 @@ The app serves at http://localhost:5000 - Flask serves both the API and frontend
 **Database schema**: `threads` (id, title, created_at) and `messages` (id, thread_id, parent_id, writer_name, content, layout_data, created_at). Messages form a tree via `parent_id`. The `layout_data` JSON column stores spiral positioning parameters for deterministic replay.
 
 ### Frontend (`frontend/`)
-Vanilla JS with classes exported to `window` (no build step, no module system). Script load order in `index.html` matters: api.js -> spiral.js -> canvas.js -> interaction.js -> app.js. Scripts use manual cache-busting query params (`?v=16`) — bump the version when changing frontend files for deployed updates.
+Vanilla JS with classes exported to `window` (no build step, no module system). Script load order in `index.html` matters: api.js -> toast.js -> spiral.js -> canvas.js -> interaction.js -> app.js. Scripts use manual cache-busting query params (e.g. `?v=21`) — bump the version when changing frontend files for deployed updates (login.html's stylesheet link too). Debug instrumentation (pixel-coincidence scan + canvas overlap markers) is opt-in via `?debug=1`.
 
 **Key classes:**
 - **`SpiralGenerator`** (spiral.js): Generates Archimedean spiral points with Catmull-Rom-to-Bezier conversion. Uses seeded RNG (`seededRandom`) for deterministic spiral shapes from message IDs. Supports both auto-generated spirals (~100 degree curl) and user-drawn spirals (exact transform parameters).

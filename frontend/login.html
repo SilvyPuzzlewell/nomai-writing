@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nomai Thread Viewer - Login</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0' fill='none' stroke='%2300d9ff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/css/styles.css?v=21">
+    <style>
+        body {
+            display: flex;
+            flex-direction: row;
+            justify-content: center;
+            align-items: center;
+            height: auto;
+            min-height: 100vh;
+            overflow: auto;
+            /* Layered space-glow background to match the app canvas */
+            background:
+                radial-gradient(ellipse at 50% 30%, rgba(0, 217, 255, 0.06) 0%, transparent 55%),
+                radial-gradient(ellipse at 50% 110%, rgba(141, 128, 181, 0.08) 0%, transparent 55%),
+                radial-gradient(circle at 50% 50%, var(--bg-color) 0%, #06080f 100%);
+        }
+
+        .login-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 40px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow:
+                0 0 40px rgba(0, 217, 255, 0.06),
+                0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .login-card h1 {
+            color: var(--curve-color);
+            text-align: center;
+            font-family: var(--font-heading);
+            font-size: 1.5rem;
+            font-weight: 400;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            text-shadow: 0 0 12px var(--curve-glow);
+            margin-bottom: 8px;
+        }
+
+        .login-card .subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 32px;
+        }
+
+        .tabs {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            transition: color 0.2s, border-color 0.2s;
+            background: none;
+            border-top: none;
+            border-left: none;
+            border-right: none;
+            font-size: 14px;
+            font-family: var(--font-heading);
+        }
+
+        .tab:hover {
+            color: var(--text-color);
+        }
+
+        .tab.active {
+            color: var(--curve-color);
+            border-bottom-color: var(--curve-color);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>Nomai Text</h1>
+        <p class="subtitle">Thread Viewer</p>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="login">Login</button>
+            <button class="tab" data-tab="register">Register</button>
+        </div>
+
+        <div id="error-msg" class="inline-error"></div>
+
+        <!-- Login form -->
+        <div id="tab-login" class="tab-content active">
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="login-username">Username</label>
+                    <input type="text" id="login-username" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <input type="password" id="login-password" autocomplete="current-password" required>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" style="flex:1">Login</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Register form -->
+        <div id="tab-register" class="tab-content">
+            <form id="register-form">
+                <div class="form-group">
+                    <label for="reg-username">Username</label>
+                    <input type="text" id="reg-username" autocomplete="username" required minlength="2">
+                </div>
+                <div class="form-group">
+                    <label for="reg-password">Password</label>
+                    <input type="password" id="reg-password" autocomplete="new-password" required minlength="6">
+                </div>
+                <div class="form-group">
+                    <label for="reg-confirm">Confirm Password</label>
+                    <input type="password" id="reg-confirm" autocomplete="new-password" required minlength="6">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" style="flex:1">Register</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const errorEl = document.getElementById('error-msg');
+
+        function showError(msg) {
+            errorEl.textContent = msg;
+            errorEl.classList.add('visible');
+        }
+
+        function hideError() {
+            errorEl.classList.remove('visible');
+        }
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+                hideError();
+            });
+        });
+
+        // Login
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+
+            const username = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value;
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    showError(data.error || 'Login failed');
+                    return;
+                }
+                window.location.href = data.redirect || '/';
+            } catch (err) {
+                showError('Network error');
+            }
+        });
+
+        // Register
+        document.getElementById('register-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            hideError();
+
+            const username = document.getElementById('reg-username').value.trim();
+            const password = document.getElementById('reg-password').value;
+            const confirm = document.getElementById('reg-confirm').value;
+
+            if (username.length < 2) {
+                showError('Username must be at least 2 characters');
+                return;
+            }
+            if (password.length < 6) {
+                showError('Password must be at least 6 characters');
+                return;
+            }
+            if (password !== confirm) {
+                showError('Passwords do not match');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    showError(data.error || 'Registration failed');
+                    return;
+                }
+                window.location.href = data.redirect || '/';
+            } catch (err) {
+                showError('Network error');
+            }
+        });
+    </script>
+</body>
+</html>

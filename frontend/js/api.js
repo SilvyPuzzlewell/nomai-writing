@@ -18,23 +18,46 @@ async function authFetch(url, options = {}) {
     return response;
 }
 
+/**
+ * Perform an authenticated API call, surfacing the backend's error
+ * message when the request fails (falling back to a generic one).
+ */
+async function apiCall(url, options, fallbackMsg) {
+    const response = await authFetch(url, options);
+    if (!response.ok) {
+        let msg = fallbackMsg;
+        try {
+            const data = await response.json();
+            if (data && data.error) msg = data.error;
+        } catch (e) {
+            // Non-JSON error body - keep the fallback message
+        }
+        throw new Error(msg);
+    }
+    return response.json();
+}
+
+function jsonBody(method, body) {
+    return {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    };
+}
+
 const api = {
     /**
      * Get all threads.
      */
     async getThreads() {
-        const response = await authFetch(`${API_BASE}/threads`);
-        if (!response.ok) throw new Error('Failed to fetch threads');
-        return response.json();
+        return apiCall(`${API_BASE}/threads`, undefined, 'Failed to fetch threads');
     },
 
     /**
      * Get a thread with all its messages.
      */
     async getThread(id) {
-        const response = await authFetch(`${API_BASE}/threads/${id}`);
-        if (!response.ok) throw new Error('Failed to fetch thread');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${id}`, undefined, 'Failed to fetch thread');
     },
 
     /**
@@ -43,24 +66,14 @@ const api = {
     async createThread(title, friendIds = []) {
         const body = { title };
         if (friendIds.length > 0) body.friend_ids = friendIds;
-        const response = await authFetch(`${API_BASE}/threads`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if (!response.ok) throw new Error('Failed to create thread');
-        return response.json();
+        return apiCall(`${API_BASE}/threads`, jsonBody('POST', body), 'Failed to create thread');
     },
 
     /**
      * Delete a thread.
      */
     async deleteThread(id) {
-        const response = await authFetch(`${API_BASE}/threads/${id}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete thread');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${id}`, { method: 'DELETE' }, 'Failed to delete thread');
     },
 
     /**
@@ -83,24 +96,14 @@ const api = {
             body.spiral_prefs = spiralPrefs;
         }
 
-        const response = await authFetch(`${API_BASE}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if (!response.ok) throw new Error('Failed to create message');
-        return response.json();
+        return apiCall(`${API_BASE}/messages`, jsonBody('POST', body), 'Failed to create message');
     },
 
     /**
      * Delete a message.
      */
     async deleteMessage(id) {
-        const response = await authFetch(`${API_BASE}/messages/${id}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete message');
-        return response.json();
+        return apiCall(`${API_BASE}/messages/${id}`, { method: 'DELETE' }, 'Failed to delete message');
     },
 
     /**
@@ -109,13 +112,7 @@ const api = {
      * @param {Object} layouts - Map of message ID to layout data JSON string
      */
     async saveLayouts(threadId, layouts) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/layouts`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ layouts })
-        });
-        if (!response.ok) throw new Error('Failed to save layouts');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/layouts`, jsonBody('PUT', { layouts }), 'Failed to save layouts');
     },
 
     /**
@@ -123,11 +120,7 @@ const api = {
      * @param {number} threadId - Thread ID
      */
     async clearLayouts(threadId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/layouts`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to clear layouts');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/layouts`, { method: 'DELETE' }, 'Failed to clear layouts');
     },
 
     /**
@@ -135,36 +128,21 @@ const api = {
      * @param {number} threadId - Thread ID
      */
     async exportThread(threadId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/export`);
-        if (!response.ok) throw new Error('Failed to export thread');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/export`, undefined, 'Failed to export thread');
     },
 
     /**
      * Send Discord notification for a thread.
      */
     async notifyDiscord(threadId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/notify-discord`, {
-            method: 'POST'
-        });
-        if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to notify Discord');
-        }
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/notify-discord`, { method: 'POST' }, 'Failed to notify Discord');
     },
 
     /**
      * Import a thread from JSON data.
      */
     async importThread(data) {
-        const response = await authFetch(`${API_BASE}/threads/import`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        if (!response.ok) throw new Error('Failed to import thread');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/import`, jsonBody('POST', data), 'Failed to import thread');
     },
 
     // =====================================================================
@@ -172,11 +150,7 @@ const api = {
     // =====================================================================
 
     async login(username, password) {
-        const response = await fetch(`${API_BASE}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
+        const response = await fetch(`${API_BASE}/auth/login`, jsonBody('POST', { username, password }));
         if (!response.ok) {
             const data = await response.json();
             throw new Error(data.error || 'Login failed');
@@ -185,11 +159,7 @@ const api = {
     },
 
     async register(username, password) {
-        const response = await fetch(`${API_BASE}/auth/register`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
+        const response = await fetch(`${API_BASE}/auth/register`, jsonBody('POST', { username, password }));
         if (!response.ok) {
             const data = await response.json();
             throw new Error(data.error || 'Registration failed');
@@ -211,16 +181,7 @@ const api = {
     },
 
     async setDiscordWebhook(url) {
-        const response = await authFetch(`${API_BASE}/auth/me/discord-webhook`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ webhook: url })
-        });
-        if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to save Discord webhook');
-        }
-        return response.json();
+        return apiCall(`${API_BASE}/auth/me/discord-webhook`, jsonBody('PUT', { webhook: url }), 'Failed to save Discord webhook');
     },
 
     // =====================================================================
@@ -228,21 +189,15 @@ const api = {
     // =====================================================================
 
     async searchUsers(query) {
-        const response = await authFetch(`${API_BASE}/users/search?q=${encodeURIComponent(query)}`);
-        if (!response.ok) throw new Error('Failed to search users');
-        return response.json();
+        return apiCall(`${API_BASE}/users/search?q=${encodeURIComponent(query)}`, undefined, 'Failed to search users');
     },
 
     async getFriends() {
-        const response = await authFetch(`${API_BASE}/friends`);
-        if (!response.ok) throw new Error('Failed to get friends');
-        return response.json();
+        return apiCall(`${API_BASE}/friends`, undefined, 'Failed to get friends');
     },
 
     async getFriendRequests() {
-        const response = await authFetch(`${API_BASE}/friends/requests`);
-        if (!response.ok) throw new Error('Failed to get friend requests');
-        return response.json();
+        return apiCall(`${API_BASE}/friends/requests`, undefined, 'Failed to get friend requests');
     },
 
     async getPendingRequestCount() {
@@ -252,40 +207,19 @@ const api = {
     },
 
     async sendFriendRequest(userId) {
-        const response = await authFetch(`${API_BASE}/friends/request`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId })
-        });
-        if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to send friend request');
-        }
-        return response.json();
+        return apiCall(`${API_BASE}/friends/request`, jsonBody('POST', { user_id: userId }), 'Failed to send friend request');
     },
 
     async acceptFriendRequest(requestId) {
-        const response = await authFetch(`${API_BASE}/friends/requests/${requestId}/accept`, {
-            method: 'POST'
-        });
-        if (!response.ok) throw new Error('Failed to accept friend request');
-        return response.json();
+        return apiCall(`${API_BASE}/friends/requests/${requestId}/accept`, { method: 'POST' }, 'Failed to accept friend request');
     },
 
     async declineFriendRequest(requestId) {
-        const response = await authFetch(`${API_BASE}/friends/requests/${requestId}/decline`, {
-            method: 'POST'
-        });
-        if (!response.ok) throw new Error('Failed to decline friend request');
-        return response.json();
+        return apiCall(`${API_BASE}/friends/requests/${requestId}/decline`, { method: 'POST' }, 'Failed to decline friend request');
     },
 
     async removeFriend(friendUserId) {
-        const response = await authFetch(`${API_BASE}/friends/${friendUserId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to remove friend');
-        return response.json();
+        return apiCall(`${API_BASE}/friends/${friendUserId}`, { method: 'DELETE' }, 'Failed to remove friend');
     },
 
     // =====================================================================
@@ -293,30 +227,15 @@ const api = {
     // =====================================================================
 
     async getThreadCollaborators(threadId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators`);
-        if (!response.ok) throw new Error('Failed to get collaborators');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/collaborators`, undefined, 'Failed to get collaborators');
     },
 
     async addThreadCollaborator(threadId, userId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId })
-        });
-        if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.error || 'Failed to add collaborator');
-        }
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/collaborators`, jsonBody('POST', { user_id: userId }), 'Failed to add collaborator');
     },
 
     async removeThreadCollaborator(threadId, userId) {
-        const response = await authFetch(`${API_BASE}/threads/${threadId}/collaborators/${userId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to remove collaborator');
-        return response.json();
+        return apiCall(`${API_BASE}/threads/${threadId}/collaborators/${userId}`, { method: 'DELETE' }, 'Failed to remove collaborator');
     },
 
 };
