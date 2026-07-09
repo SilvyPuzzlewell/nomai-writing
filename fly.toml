@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for nomai-thread-viewer on 2026-03-15T08:42:17+01:00
+# fly.toml app configuration for the nomai-writing Fly app
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'nomai-thread-viewer'
+app = 'nomai-writing'
 primary_region = 'iad'
 
 [build]
