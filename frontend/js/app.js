@@ -362,11 +362,15 @@ class NomaiApp {
             // Reloading the same thread (e.g. after adding a message) keeps the camera still
             const sameThread = this.currentThreadId === threadId;
 
+            // The storage key includes created_at so state saved against an old
+            // database (same sequential ids, different thread) can never leak in
+            this.currentThreadCreatedAt = thread.created_at;
+
             // Only clear translation state when switching to a different thread
             if (!sameThread) {
                 this.canvas.clearTranslated();
                 // Restore saved translation state from localStorage
-                this.loadTranslationState(threadId);
+                this.loadTranslationState(thread);
             }
             this.currentThreadId = threadId;
             this.currentThreadOwnerId = thread.user_id;
@@ -890,15 +894,23 @@ class NomaiApp {
     }
 
     /**
+     * How long a full translation takes for the given text.
+     * 25 chars/sec, but never under 2s so a stray click can't
+     * instantly translate a short message - you have to hold.
+     */
+    translationDuration(content) {
+        const charsPerSecond = 25;
+        return Math.max(2000, (content.length / charsPerSecond) * 1000);
+    }
+
+    /**
      * Handle mouse down - start translation.
      */
     handleMouseDown(message) {
         if (!message) return;
 
-        // Calculate duration based on content length only (author shown immediately)
-        const totalChars = message.content.length;
-        const charsPerSecond = 25;
-        const duration = (totalChars / charsPerSecond) * 1000;
+        // Duration based on content length only (author shown immediately)
+        const duration = this.translationDuration(message.content);
 
         // Start spiral color transition
         const startProgress = this.canvas.startTransition(message.id, duration);
@@ -950,8 +962,8 @@ class NomaiApp {
 
         const contentText = message.content;
         const totalChars = contentText.length;
-        const charsPerSecond = 25; // Constant rate regardless of length
-        const duration = (totalChars / charsPerSecond) * 1000;
+        // Must match the spiral transition so text and color stay in sync
+        const duration = this.translationDuration(contentText);
         const startTime = performance.now();
 
         // Store current message for tracking
@@ -1492,25 +1504,40 @@ class NomaiApp {
     }
 
     /**
+     * localStorage key for a thread's translation state. Includes created_at
+     * so ids from a wiped/recreated database can't match a new thread.
+     */
+    translationStorageKey(threadId, createdAt) {
+        return `nomai_translated_${threadId}_${createdAt || ''}`;
+    }
+
+    /**
      * Save translation state to localStorage.
      */
     saveTranslationState() {
         if (!this.currentThreadId) return;
-        const key = `nomai_translated_${this.currentThreadId}`;
+        const key = this.translationStorageKey(this.currentThreadId, this.currentThreadCreatedAt);
         const ids = this.canvas.getTranslatedIds();
         localStorage.setItem(key, JSON.stringify(ids));
     }
 
     /**
      * Load translation state from localStorage.
+     * @param {Object} thread - Thread from the API (with messages)
      */
-    loadTranslationState(threadId) {
-        const key = `nomai_translated_${threadId}`;
+    loadTranslationState(thread) {
+        // Drop the legacy key (no created_at): it may describe a different
+        // database's ids, which is exactly the stale state we're guarding against
+        localStorage.removeItem(`nomai_translated_${thread.id}`);
+
+        const key = this.translationStorageKey(thread.id, thread.created_at);
         const stored = localStorage.getItem(key);
         if (stored) {
             try {
                 const ids = JSON.parse(stored);
-                this.canvas.restoreTranslated(ids);
+                // Only restore ids that are actually part of this thread
+                const valid = new Set((thread.messages || []).map(m => m.id));
+                this.canvas.restoreTranslated(ids.filter(id => valid.has(id)));
             } catch (e) {
                 console.error('Failed to parse translation state:', e);
             }

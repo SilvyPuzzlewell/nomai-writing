@@ -35,8 +35,8 @@ class NomaiCanvas {
         this.minScale = 0.2;
         this.maxScale = 4;
 
-        // Static starfield background (offscreen canvas, rebuilt on resize)
-        this.starfieldCanvas = null;
+        // Static adobe-wall background (offscreen canvas, rebuilt on resize)
+        this.backgroundCanvas = null;
 
         // Colors are read from CSS custom properties so the palette lives in one place
         this.readThemeColors();
@@ -183,16 +183,37 @@ class NomaiCanvas {
     }
 
     // =========================================================================
-    // Starfield background
+    // Adobe-wall background (Nomai writing wall, warm lit clay)
     // =========================================================================
 
     /**
-     * Build the static starfield on an offscreen canvas (called on resize).
+     * Build a small tiling grain-noise canvas used to give the clay a
+     * matte finish.
      */
-    buildStarfield() {
+    buildGrainTile(size = 256) {
+        const tile = document.createElement('canvas');
+        tile.width = size;
+        tile.height = size;
+        const tctx = tile.getContext('2d');
+        const img = tctx.createImageData(size, size);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+            const v = Math.random() > 0.5 ? 255 : 0;
+            d[i] = d[i + 1] = d[i + 2] = v;
+            d[i + 3] = Math.floor(Math.random() * 14); // very low alpha speckle
+        }
+        tctx.putImageData(img, 0, 0);
+        return tile;
+    }
+
+    /**
+     * Build the static adobe-wall background on an offscreen canvas
+     * (called on resize).
+     */
+    buildBackground() {
         const w = this.width, h = this.height;
         if (!w || !h) {
-            this.starfieldCanvas = null;
+            this.backgroundCanvas = null;
             return;
         }
 
@@ -203,34 +224,93 @@ class NomaiCanvas {
         const octx = off.getContext('2d');
         octx.scale(dpr, dpr);
 
-        const count = Math.round((w * h) / 6000);
-        for (let i = 0; i < count; i++) {
+        // Base: deep shadowed clay, the tone the wall falls into at the edges
+        octx.fillStyle = '#241410';
+        octx.fillRect(0, 0, w, h);
+
+        // Broad warm light on the adobe: bright sunlit clay off-center,
+        // falling off through terracotta into shadow
+        const lx = w * 0.45, ly = h * 0.42;
+        const lr = Math.max(w, h) * 0.9;
+        const light = octx.createRadialGradient(lx, ly, 0, lx, ly, lr);
+        light.addColorStop(0, '#b06a41');
+        light.addColorStop(0.35, '#93502e');
+        light.addColorStop(0.7, '#5e3220');
+        light.addColorStop(1, '#2a1710');
+        octx.fillStyle = light;
+        octx.fillRect(0, 0, w, h);
+
+        // Soft warm mottling: big smooth patches, like hand-smoothed plaster
+        const blotchCount = Math.round((w * h) / 14000);
+        for (let i = 0; i < blotchCount; i++) {
             const x = Math.random() * w;
             const y = Math.random() * h;
-            const r = 0.4 + Math.random() * 0.9;
-            const alpha = 0.15 + Math.random() * 0.55;
-
-            // Mostly white stars, with the occasional cyan or warm one
-            const tint = Math.random();
-            let color = `rgba(255, 255, 255, ${alpha})`;
-            if (tint > 0.93) color = `rgba(160, 235, 255, ${alpha})`;
-            else if (tint > 0.87) color = `rgba(255, 205, 160, ${alpha})`;
-
+            const r = 50 + Math.random() * 180;
+            const lighter = Math.random() > 0.45;
+            const c = lighter ? '255, 200, 150' : '30, 12, 6';
+            const a = 0.015 + Math.random() * 0.04;
+            const grad = octx.createRadialGradient(x, y, 0, x, y, r);
+            grad.addColorStop(0, `rgba(${c}, ${a})`);
+            grad.addColorStop(1, `rgba(${c}, 0)`);
+            octx.fillStyle = grad;
             octx.beginPath();
             octx.arc(x, y, r, 0, 2 * Math.PI);
-            octx.fillStyle = color;
             octx.fill();
         }
 
-        this.starfieldCanvas = off;
+        // Fine grain, subtle - adobe reads smooth from a distance
+        const pattern = octx.createPattern(this.buildGrainTile(), 'repeat');
+        if (pattern) {
+            octx.fillStyle = pattern;
+            octx.fillRect(0, 0, w, h);
+        }
+
+        // A couple of barely-there seams in the clay
+        const crackCount = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < crackCount; i++) {
+            const pts = [];
+            let cx = Math.random() * w;
+            let cy = Math.random() * h;
+            const angle = Math.random() * 2 * Math.PI;
+            const steps = 5 + Math.floor(Math.random() * 6);
+            for (let s = 0; s < steps; s++) {
+                pts.push({ x: cx, y: cy });
+                const len = 25 + Math.random() * 55;
+                const wobble = (Math.random() - 0.5) * 1.2;
+                cx += Math.cos(angle + wobble) * len;
+                cy += Math.sin(angle + wobble) * len;
+            }
+            octx.beginPath();
+            octx.moveTo(pts[0].x, pts[0].y);
+            for (let s = 1; s < pts.length; s++) {
+                octx.lineTo(pts[s].x, pts[s].y);
+            }
+            octx.strokeStyle = 'rgba(20, 8, 4, 0.18)';
+            octx.lineWidth = 1;
+            octx.stroke();
+        }
+
+        // Night-sky vignette: the corners fall away into darkness,
+        // like the dome emerging from the dark
+        const vig = octx.createRadialGradient(
+            lx, ly, Math.min(w, h) * 0.3,
+            lx, ly, Math.max(w, h) * 0.95
+        );
+        vig.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        vig.addColorStop(0.7, 'rgba(10, 4, 2, 0.25)');
+        vig.addColorStop(1, 'rgba(5, 2, 1, 0.6)');
+        octx.fillStyle = vig;
+        octx.fillRect(0, 0, w, h);
+
+        this.backgroundCanvas = off;
     }
 
     /**
-     * Blit the starfield (screen space, fixed - no parallax).
+     * Blit the adobe wall (screen space, fixed - no parallax).
      */
-    drawStarfield() {
-        if (!this.starfieldCanvas) return;
-        this.ctx.drawImage(this.starfieldCanvas, 0, 0, this.width, this.height);
+    drawBackground() {
+        if (!this.backgroundCanvas) return;
+        this.ctx.drawImage(this.backgroundCanvas, 0, 0, this.width, this.height);
     }
 
     /**
@@ -262,8 +342,8 @@ class NomaiCanvas {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
 
-        // Rebuild the starfield for the new dimensions
-        this.buildStarfield();
+        // Rebuild the stone background for the new dimensions
+        this.buildBackground();
 
         // Re-layout and render if we have messages
         if (this.messages.length > 0) {
@@ -702,8 +782,8 @@ class NomaiCanvas {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.width, this.height);
 
-        // Background stars are fixed in screen space (drawn before the camera transform)
-        this.drawStarfield();
+        // The adobe wall is fixed in screen space (drawn before the camera transform)
+        this.drawBackground();
 
         if (this.messages.length === 0 && !this.previewSpiral) {
             this.drawEmptyState();
@@ -773,13 +853,18 @@ class NomaiCanvas {
      */
     drawEmptyState() {
         const ctx = this.ctx;
+        ctx.save();
         ctx.textAlign = 'center';
-        ctx.fillStyle = this.rgba(this.colors.curve, 0.55);
+        // Dark halo so the text stays readable on the lit clay
+        ctx.shadowColor = 'rgba(30, 12, 5, 0.9)';
+        ctx.shadowBlur = 6;
+        ctx.fillStyle = this.rgba(this.colors.curve, 0.85);
         ctx.font = '16px "Space Grotesk", "Segoe UI", sans-serif';
         ctx.fillText('Select a thread or create a new one', this.width / 2, this.height / 2);
-        ctx.fillStyle = 'rgba(152, 162, 184, 0.6)';
+        ctx.fillStyle = 'rgba(240, 228, 210, 0.7)';
         ctx.font = '13px "Space Grotesk", "Segoe UI", sans-serif';
         ctx.fillText('Glyphs appear here — hold one to translate it', this.width / 2, this.height / 2 + 28);
+        ctx.restore();
     }
 
     /**

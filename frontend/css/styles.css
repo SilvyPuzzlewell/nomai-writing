@@ -201,10 +201,9 @@ select:focus {
     min-width: 0;
     min-height: 0;
     position: relative;
-    background:
-        radial-gradient(ellipse at 50% 38%, rgba(0, 217, 255, 0.05) 0%, transparent 60%),
-        radial-gradient(ellipse at 50% 120%, rgba(141, 128, 181, 0.06) 0%, transparent 55%),
-        radial-gradient(circle at 50% 50%, var(--bg-color) 0%, #06080f 100%);
+    /* Adobe-wall tone matching the canvas's procedural texture (shown
+       briefly before the canvas paints) */
+    background: radial-gradient(circle at 45% 42%, #93502e 0%, #5e3220 45%, #241410 100%);
 }
 
 #spiral-canvas {
