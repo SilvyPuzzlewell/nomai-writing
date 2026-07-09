@@ -5,22 +5,17 @@
 
 cd "$(dirname "$0")"
 
-# Load .env file if it exists
-if [ -f .env ]; then
-    echo "Loading environment from .env file..."
-    export $(grep -v '^#' .env | xargs)
-fi
+# Ensure Turso env vars are unset (use local SQLite)
+unset TURSO_DATABASE_URL
+unset TURSO_AUTH_TOKEN
 
 echo "Starting Nomai Thread Viewer..."
 source venv/bin/activate
 
-# Show which database is being used
-if [ -n "$TURSO_DATABASE_URL" ]; then
-    echo "Using Turso database: ${TURSO_DATABASE_URL:0:40}..."
-else
-    echo "Using local SQLite database"
-fi
+# Create data directory if it doesn't exist
+mkdir -p data
 
+echo "Using local SQLite database"
 python backend/app.py
 
 # Server runs at http://localhost:5000

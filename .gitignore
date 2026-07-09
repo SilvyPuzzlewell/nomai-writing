@@ -5,3 +5,7 @@ data/
 .claude/
 .idea/
 .env
+
+# Personal exports and credential notes - never commit
+threds2.txt
+for_you__cherry_blossom*.json
