@@ -35,12 +35,19 @@ class NomaiCanvas {
         this.minScale = 0.2;
         this.maxScale = 4;
 
-        // Static adobe-wall background (offscreen canvas, rebuilt on resize)
-        this.backgroundCanvas = null;
+        // Adobe-wall background, split into two layers:
+        // - wallTile/wallPattern: seamless clay texture in world space, so it
+        //   pans and zooms with the writing (built once)
+        // - lightingCanvas: warm light + vignette fixed to the screen, like a
+        //   light travelling with the viewer (rebuilt on resize)
+        this.wallTile = null;
+        this.wallPattern = null;
+        this.lightingCanvas = null;
 
         // Colors are read from CSS custom properties so the palette lives in one place
         this.readThemeColors();
 
+        this.buildWallTile();
         this.resize();
         window.addEventListener('resize', () => this.resize());
     }
@@ -207,13 +214,96 @@ class NomaiCanvas {
     }
 
     /**
-     * Build the static adobe-wall background on an offscreen canvas
-     * (called on resize).
+     * Build the seamless world-space clay texture tile (built once). Holds
+     * the fully-lit clay tone plus surface detail - mottling, grain, seams -
+     * all drawn with 3x3 wraparound so the tile repeats without seams.
      */
-    buildBackground() {
+    buildWallTile(size = 1024) {
+        const tile = document.createElement('canvas');
+        tile.width = size;
+        tile.height = size;
+        const tctx = tile.getContext('2d');
+
+        // Flat fully-lit clay; the screen-space lighting pass shades it
+        tctx.fillStyle = '#b06a41';
+        tctx.fillRect(0, 0, size, size);
+
+        // Soft warm mottling: big smooth patches, like hand-smoothed plaster
+        const blotchCount = Math.round((size * size) / 14000);
+        for (let i = 0; i < blotchCount; i++) {
+            const x = Math.random() * size;
+            const y = Math.random() * size;
+            const r = 50 + Math.random() * 180;
+            const lighter = Math.random() > 0.45;
+            const c = lighter ? '255, 200, 150' : '30, 12, 6';
+            const a = 0.015 + Math.random() * 0.04;
+            for (let ox = -1; ox <= 1; ox++) {
+                for (let oy = -1; oy <= 1; oy++) {
+                    const bx = x + ox * size, by = y + oy * size;
+                    if (bx + r < 0 || bx - r > size || by + r < 0 || by - r > size) continue;
+                    const grad = tctx.createRadialGradient(bx, by, 0, bx, by, r);
+                    grad.addColorStop(0, `rgba(${c}, ${a})`);
+                    grad.addColorStop(1, `rgba(${c}, 0)`);
+                    tctx.fillStyle = grad;
+                    tctx.beginPath();
+                    tctx.arc(bx, by, r, 0, 2 * Math.PI);
+                    tctx.fill();
+                }
+            }
+        }
+
+        // Fine grain, subtle - adobe reads smooth from a distance
+        // (the grain tile divides the wall tile evenly, so it stays seamless)
+        const pattern = tctx.createPattern(this.buildGrainTile(), 'repeat');
+        if (pattern) {
+            tctx.fillStyle = pattern;
+            tctx.fillRect(0, 0, size, size);
+        }
+
+        // A couple of barely-there seams in the clay
+        const crackCount = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < crackCount; i++) {
+            const pts = [];
+            let cx = Math.random() * size;
+            let cy = Math.random() * size;
+            const angle = Math.random() * 2 * Math.PI;
+            const steps = 5 + Math.floor(Math.random() * 6);
+            for (let s = 0; s < steps; s++) {
+                pts.push({ x: cx, y: cy });
+                const len = 25 + Math.random() * 55;
+                const wobble = (Math.random() - 0.5) * 1.2;
+                cx += Math.cos(angle + wobble) * len;
+                cy += Math.sin(angle + wobble) * len;
+            }
+            tctx.strokeStyle = 'rgba(20, 8, 4, 0.18)';
+            tctx.lineWidth = 1;
+            for (let ox = -1; ox <= 1; ox++) {
+                for (let oy = -1; oy <= 1; oy++) {
+                    tctx.beginPath();
+                    tctx.moveTo(pts[0].x + ox * size, pts[0].y + oy * size);
+                    for (let s = 1; s < pts.length; s++) {
+                        tctx.lineTo(pts[s].x + ox * size, pts[s].y + oy * size);
+                    }
+                    tctx.stroke();
+                }
+            }
+        }
+
+        this.wallTile = tile;
+        this.wallPattern = this.ctx.createPattern(tile, 'repeat');
+    }
+
+    /**
+     * Build the screen-fixed lighting overlay (warm light + night-sky
+     * vignette) on an offscreen canvas (called on resize). Blitted with
+     * 'multiply' over the wall texture, so the stop colors are shading
+     * factors relative to the tile's fully-lit clay - white keeps the
+     * sunlit tone, darker stops fall off into shadow.
+     */
+    buildLighting() {
         const w = this.width, h = this.height;
         if (!w || !h) {
-            this.backgroundCanvas = null;
+            this.lightingCanvas = null;
             return;
         }
 
@@ -224,71 +314,17 @@ class NomaiCanvas {
         const octx = off.getContext('2d');
         octx.scale(dpr, dpr);
 
-        // Base: deep shadowed clay, the tone the wall falls into at the edges
-        octx.fillStyle = '#241410';
-        octx.fillRect(0, 0, w, h);
-
         // Broad warm light on the adobe: bright sunlit clay off-center,
         // falling off through terracotta into shadow
         const lx = w * 0.45, ly = h * 0.42;
         const lr = Math.max(w, h) * 0.9;
         const light = octx.createRadialGradient(lx, ly, 0, lx, ly, lr);
-        light.addColorStop(0, '#b06a41');
-        light.addColorStop(0.35, '#93502e');
-        light.addColorStop(0.7, '#5e3220');
-        light.addColorStop(1, '#2a1710');
+        light.addColorStop(0, '#ffffff');
+        light.addColorStop(0.35, 'rgb(213, 192, 181)');
+        light.addColorStop(0.7, 'rgb(136, 120, 126)');
+        light.addColorStop(1, 'rgb(61, 55, 63)');
         octx.fillStyle = light;
         octx.fillRect(0, 0, w, h);
-
-        // Soft warm mottling: big smooth patches, like hand-smoothed plaster
-        const blotchCount = Math.round((w * h) / 14000);
-        for (let i = 0; i < blotchCount; i++) {
-            const x = Math.random() * w;
-            const y = Math.random() * h;
-            const r = 50 + Math.random() * 180;
-            const lighter = Math.random() > 0.45;
-            const c = lighter ? '255, 200, 150' : '30, 12, 6';
-            const a = 0.015 + Math.random() * 0.04;
-            const grad = octx.createRadialGradient(x, y, 0, x, y, r);
-            grad.addColorStop(0, `rgba(${c}, ${a})`);
-            grad.addColorStop(1, `rgba(${c}, 0)`);
-            octx.fillStyle = grad;
-            octx.beginPath();
-            octx.arc(x, y, r, 0, 2 * Math.PI);
-            octx.fill();
-        }
-
-        // Fine grain, subtle - adobe reads smooth from a distance
-        const pattern = octx.createPattern(this.buildGrainTile(), 'repeat');
-        if (pattern) {
-            octx.fillStyle = pattern;
-            octx.fillRect(0, 0, w, h);
-        }
-
-        // A couple of barely-there seams in the clay
-        const crackCount = 2 + Math.floor(Math.random() * 2);
-        for (let i = 0; i < crackCount; i++) {
-            const pts = [];
-            let cx = Math.random() * w;
-            let cy = Math.random() * h;
-            const angle = Math.random() * 2 * Math.PI;
-            const steps = 5 + Math.floor(Math.random() * 6);
-            for (let s = 0; s < steps; s++) {
-                pts.push({ x: cx, y: cy });
-                const len = 25 + Math.random() * 55;
-                const wobble = (Math.random() - 0.5) * 1.2;
-                cx += Math.cos(angle + wobble) * len;
-                cy += Math.sin(angle + wobble) * len;
-            }
-            octx.beginPath();
-            octx.moveTo(pts[0].x, pts[0].y);
-            for (let s = 1; s < pts.length; s++) {
-                octx.lineTo(pts[s].x, pts[s].y);
-            }
-            octx.strokeStyle = 'rgba(20, 8, 4, 0.18)';
-            octx.lineWidth = 1;
-            octx.stroke();
-        }
 
         // Night-sky vignette: the corners fall away into darkness,
         // like the dome emerging from the dark
@@ -302,15 +338,33 @@ class NomaiCanvas {
         octx.fillStyle = vig;
         octx.fillRect(0, 0, w, h);
 
-        this.backgroundCanvas = off;
+        this.lightingCanvas = off;
     }
 
     /**
-     * Blit the adobe wall (screen space, fixed - no parallax).
+     * Draw the adobe wall: clay texture in world space (it pans and zooms
+     * with the writing), shaded by the screen-fixed lighting overlay.
      */
     drawBackground() {
-        if (!this.backgroundCanvas) return;
-        this.ctx.drawImage(this.backgroundCanvas, 0, 0, this.width, this.height);
+        const ctx = this.ctx;
+
+        if (this.wallPattern) {
+            ctx.save();
+            ctx.translate(this.camera.offsetX, this.camera.offsetY);
+            ctx.scale(this.camera.scale, this.camera.scale);
+            const tl = this.screenToWorld(0, 0);
+            const br = this.screenToWorld(this.width, this.height);
+            ctx.fillStyle = this.wallPattern;
+            ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+            ctx.restore();
+        }
+
+        if (this.lightingCanvas) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'multiply';
+            ctx.drawImage(this.lightingCanvas, 0, 0, this.width, this.height);
+            ctx.restore();
+        }
     }
 
     /**
@@ -342,8 +396,8 @@ class NomaiCanvas {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
 
-        // Rebuild the stone background for the new dimensions
-        this.buildBackground();
+        // Rebuild the screen-fixed lighting overlay for the new dimensions
+        this.buildLighting();
 
         // Re-layout and render if we have messages
         if (this.messages.length > 0) {
@@ -782,7 +836,7 @@ class NomaiCanvas {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.width, this.height);
 
-        // The adobe wall is fixed in screen space (drawn before the camera transform)
+        // Adobe wall: texture moves with the world, lighting stays with the screen
         this.drawBackground();
 
         if (this.messages.length === 0 && !this.previewSpiral) {
