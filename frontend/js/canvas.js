@@ -50,6 +50,14 @@ class NomaiCanvas {
         this.buildWallTile();
         this.resize();
         window.addEventListener('resize', () => this.resize());
+
+        // Header controls can wrap or become visible after data loads without
+        // firing a window resize. Watch the actual container so the canvas
+        // bitmap and hit-test coordinates always match its displayed size.
+        if (typeof ResizeObserver !== 'undefined') {
+            this.resizeObserver = new ResizeObserver(() => this.resize());
+            this.resizeObserver.observe(this.canvas.parentElement);
+        }
     }
 
     /**
@@ -373,21 +381,29 @@ class NomaiCanvas {
     resize() {
         const container = this.canvas.parentElement;
         const dpr = window.devicePixelRatio || 1;
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+
+        if (width === this.width && height === this.height && dpr === this.dpr) {
+            return;
+        }
+
+        this.dpr = dpr;
 
         // Set display size
-        this.canvas.style.width = container.clientWidth + 'px';
-        this.canvas.style.height = container.clientHeight + 'px';
+        this.canvas.style.width = width + 'px';
+        this.canvas.style.height = height + 'px';
 
         // Set actual size in memory (scaled for HiDPI)
-        this.canvas.width = container.clientWidth * dpr;
-        this.canvas.height = container.clientHeight * dpr;
+        this.canvas.width = width * dpr;
+        this.canvas.height = height * dpr;
 
         // Reset transform and scale context for HiDPI
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
         // Store logical dimensions
-        this.width = container.clientWidth;
-        this.height = container.clientHeight;
+        this.width = width;
+        this.height = height;
 
         // Update layout engine
         if (this.layoutEngine) {

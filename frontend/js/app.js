@@ -93,6 +93,7 @@ class NomaiApp {
         try {
             const user = await api.getMe();
             if (user) {
+                this.currentUserId = user.id;
                 const usernameEl = document.getElementById('current-username');
                 if (usernameEl) usernameEl.textContent = user.username;
             }
@@ -223,7 +224,7 @@ class NomaiApp {
 
         // Friends tab switching
         document.querySelectorAll('.friends-tab').forEach(tab => {
-            tab.addEventListener('click', (e) => this.switchFriendsTab(e.target.dataset.tab));
+            tab.addEventListener('click', (e) => this.switchFriendsTab(e.currentTarget.dataset.tab));
         });
 
         // Friend search with debounce
@@ -374,9 +375,11 @@ class NomaiApp {
             }
             this.currentThreadId = threadId;
             this.currentThreadOwnerId = thread.user_id;
+            const isOwner = this.currentUserId === this.currentThreadOwnerId;
 
             // Show collaborators button when a thread is selected
             document.getElementById('collaborators-btn').classList.remove('hidden');
+            document.getElementById('clear-thread-btn').classList.toggle('hidden', !isOwner);
 
             // Notify button is active only when the thread is shared with someone
             try {
@@ -724,6 +727,7 @@ class NomaiApp {
         document.getElementById('thread-selector').value = '';
         document.getElementById('collaborators-btn').classList.add('hidden');
         document.getElementById('notify-btn').classList.add('hidden');
+        document.getElementById('clear-thread-btn').classList.add('hidden');
     }
 
     /**
@@ -859,7 +863,7 @@ class NomaiApp {
         this.updateTranslationPanel(message);
         // Show/hide delete button
         const deleteBtn = document.getElementById('delete-message-btn');
-        if (message) {
+        if (message && this.currentUserId === this.currentThreadOwnerId) {
             deleteBtn.classList.remove('hidden');
         } else {
             deleteBtn.classList.add('hidden');

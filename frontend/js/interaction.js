@@ -98,6 +98,15 @@ class InteractionHandler {
             if (e.touches.length < 2) this.pinchDist = null;
             this.handleMouseUp();
         });
+        canvasEl.addEventListener('touchcancel', (e) => {
+            e.preventDefault();
+            this.pinchDist = null;
+            if (this.drawingState !== InteractionHandler.STATE_IDLE) {
+                this.cancelDrawing();
+            }
+            this.handleMouseUp();
+            this.handleMouseLeave();
+        });
         canvasEl.addEventListener('touchmove', (e) => {
             e.preventDefault();
             if (e.touches.length === 2 && this.drawingState === InteractionHandler.STATE_IDLE) {
@@ -550,7 +559,7 @@ class InteractionHandler {
         if (this.drawingState === InteractionHandler.STATE_DRAWING_SPIRAL) {
             // Adjust curvature based on wheel delta
             const delta = event.deltaY > 0 ? -0.05 : 0.05;
-            this.previewCurvature = Math.max(0.1, Math.min(1.0, this.previewCurvature + delta));
+            this.previewCurvature = Math.max(0, Math.min(1.0, this.previewCurvature + delta));
 
             // Get current mouse position and update preview
             const coords = this.getCanvasCoords(event);
