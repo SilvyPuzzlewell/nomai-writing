@@ -59,22 +59,35 @@ body {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 10px 16px;
-    padding: 10px 20px;
+    gap: 10px clamp(8px, 0.8vw, 16px);
+    padding: 10px clamp(10px, 1.2vw, 20px);
     min-height: 60px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
 }
 
+/* Header controls scale down fluidly on narrower windows so the toolbar
+   compresses onto one line instead of wrapping. */
+#header .btn {
+    font-size: clamp(10px, 0.73vw, 14px);
+    padding: 8px clamp(5px, 0.73vw, 14px);
+    white-space: nowrap;
+}
+
+#header .btn-small {
+    font-size: clamp(10px, 0.63vw, 12px);
+    padding: 4px clamp(4px, 0.52vw, 10px);
+}
+
 .header-title {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: clamp(6px, 0.6vw, 10px);
     font-family: var(--font-heading);
-    font-size: 1.15rem;
+    font-size: clamp(0.85rem, 1.02vw, 1.15rem);
     color: var(--curve-color);
     text-transform: uppercase;
-    letter-spacing: 3px;
+    letter-spacing: clamp(1px, 0.16vw, 3px);
     font-weight: 400;
     text-shadow: 0 0 12px var(--curve-glow);
     white-space: nowrap;
@@ -89,11 +102,11 @@ body {
 
 .header-group {
     display: flex;
-    gap: 8px;
+    gap: clamp(4px, 0.42vw, 8px);
     align-items: center;
     flex-wrap: wrap;
     min-width: 0;
-    padding-left: 16px;
+    padding-left: clamp(6px, 0.83vw, 16px);
     border-left: 1px solid var(--border-color);
 }
 
@@ -101,17 +114,22 @@ body {
 .user-info {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: clamp(4px, 0.52vw, 10px);
     margin-left: auto;
-    padding-left: 16px;
+    min-width: 0;
+    padding-left: clamp(6px, 0.83vw, 16px);
     border-left: 1px solid var(--border-color);
 }
 
 .username-display {
     color: var(--curve-color);
     font-family: var(--font-heading);
-    font-size: 14px;
+    font-size: clamp(10px, 0.73vw, 14px);
     letter-spacing: 0.5px;
+    max-width: clamp(50px, 10vw, 220px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Buttons */
@@ -178,6 +196,17 @@ select {
     max-width: min(360px, 100%);
     cursor: pointer;
     transition: border-color 0.15s;
+}
+
+/* Explicit fluid width: under flex-wrap, line-breaking uses the item's
+   content size, so the selector must actually be narrower (not merely
+   shrinkable) for the header to fit on one line. */
+#thread-selector {
+    flex: 0 1 auto;
+    width: clamp(140px, 18vw, 360px);
+    min-width: 90px;
+    font-size: clamp(10px, 0.73vw, 14px);
+    padding: 8px clamp(5px, 0.63vw, 12px);
 }
 
 select:hover {
@@ -813,6 +842,15 @@ select:focus-visible {
     }
 }
 
+/* Narrow desktop: not even fully compressed controls fit next to the app
+   name, so collapse the title to its glyph to keep the header on one row. */
+@media (min-width: 601px) and (max-width: 1023px) {
+    .header-title {
+        font-size: 0;
+        gap: 0;
+    }
+}
+
 @media (max-width: 600px) {
     #header {
         padding: 8px 12px;
@@ -842,19 +880,32 @@ select:focus-visible {
     .username-display {
         flex: 1 1 80px;
         min-width: 0;
+        max-width: none;
+        font-size: 13px;
         overflow: hidden;
         text-overflow: ellipsis;
     }
 
     #thread-selector {
         flex: 1 1 220px;
+        width: auto;
         min-width: 0;
         max-width: 100%;
+        font-size: 13px;
+        padding: 8px 12px;
     }
 
-    .btn {
+    /* The header wraps into full-width rows here, so undo the fluid
+       compression and keep controls at comfortable tap sizes. */
+    .btn,
+    #header .btn {
         padding: 6px 10px;
         font-size: 13px;
+    }
+
+    #header .btn-small {
+        padding: 4px 8px;
+        font-size: 12px;
     }
 
     select {
