@@ -1,3 +1,20 @@
+/* =============================================================
+   Nomai Thread Viewer
+
+   The chrome is the same adobe clay as the canvas wall, seen in
+   shadow, so the app reads as one continuous surface rather than
+   a warm picture in a cold frame.
+
+   Color rules:
+     cyan   - Nomai glyph light. Untranslated writing, and by
+              extension every primary action ("write" glows like
+              the writing).
+     orange - a physical marker on the wall (branch points, the
+              drawing preview). Canvas-space only: on clay it has
+              almost no separation, so it is never chrome.
+     purple - translated writing.
+   ============================================================= */
+
 /* Heading webfont (bundled - no external requests) */
 @font-face {
     font-family: 'Space Grotesk';
@@ -8,33 +25,52 @@
 }
 
 :root {
-    /* Deep-space background scale */
-    --bg-color: #0a0e1a;
-    --bg-secondary: #10182b;
-    --panel-bg: #0b1120;
+    /* Adobe-wall stone scale */
+    --bg-color: #14100e;
+    --bg-secondary: #1e1713;
+    /* Translucent only where a backdrop-filter backs it up; --panel-solid is
+       genuinely opaque, so menus never let the canvas read through them */
+    --panel-bg: rgba(28, 20, 16, 0.74);
+    --panel-solid: #1a1310;
 
     /* Nomai cyan - the glyph/identity color */
     --curve-color: #00d9ff;
     --curve-glow: rgba(0, 217, 255, 0.4);
+    --on-curve: #06171c; /* text on a cyan fill */
 
     /* Translated glyphs - Nomai purple */
     --translated-color: #8d80b5;
     --translated-glow: rgba(141, 128, 181, 0.4);
 
-    /* Warm accent (Outer Wilds orange) - primary actions & markers */
+    /* Warm accent (Outer Wilds orange) - canvas markers only */
     --accent-color: #ff9a3c;
     --accent-hover: #ffb066;
 
-    --text-color: #e8e9f0;
-    --text-muted: #98a2b8;
-    --border-color: #223354;
-    --btn-bg: #1c2b47;
-    --btn-hover: #2a3f63;
-    --danger-color: #e74c3c;
-    --danger-hover: #c0392b;
+    --text-color: #f2e9df;
+    --text-muted: #ab998b;
+    --border-color: #3a2c23;
+    --border-strong: #55402f;
+    --btn-bg: #2c211a;
+    --btn-hover: #362820;
+    --danger-color: #e2614c;
+    --danger-hover: #c8452f;
 
-    --font-heading: 'Space Grotesk', 'Segoe UI', Tahoma, sans-serif;
-    --font-body: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    /* A lit top edge sells the panels as stone rather than divs */
+    --stone-lip: inset 0 1px 0 rgba(255, 225, 200, 0.07);
+
+    --font-heading: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    /* Segoe UI ships only on Windows; the old stack fell through to
+       Verdana on iOS, which pairs badly with Space Grotesk. */
+    --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+                 'Helvetica Neue', sans-serif;
+
+    --header-h: 56px;
+    --sheet-peek: 96px;
+
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -52,45 +88,45 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
 }
 
-/* Header */
+/* =============================================================
+   Header
+   Always five slots: glyph, title, thread selector, primary
+   action, overflow. Everything else lives in the overflow menu,
+   at every width - which is what lets the controls stay at a
+   readable size instead of being clamped down to 10px.
+   ============================================================= */
 #header {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 10px clamp(8px, 0.8vw, 16px);
-    padding: 10px clamp(10px, 1.2vw, 20px);
-    min-height: 60px;
+    gap: 8px;
+    min-height: var(--header-h);
+    padding: 8px 12px;
+    padding-left: max(12px, var(--safe-l));
+    padding-right: max(12px, var(--safe-r));
+    padding-top: max(8px, var(--safe-t));
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
-}
-
-/* Header controls scale down fluidly on narrower windows so the toolbar
-   compresses onto one line instead of wrapping. */
-#header .btn {
-    font-size: clamp(10px, 0.73vw, 14px);
-    padding: 8px clamp(5px, 0.73vw, 14px);
-    white-space: nowrap;
-}
-
-#header .btn-small {
-    font-size: clamp(10px, 0.63vw, 12px);
-    padding: 4px clamp(4px, 0.52vw, 10px);
+    box-shadow: var(--stone-lip);
+    position: relative;
+    z-index: 60;
 }
 
 .header-title {
     display: flex;
     align-items: center;
-    gap: clamp(6px, 0.6vw, 10px);
+    gap: 9px;
     font-family: var(--font-heading);
-    font-size: clamp(0.85rem, 1.02vw, 1.15rem);
+    font-size: 1.05rem;
     color: var(--curve-color);
     text-transform: uppercase;
-    letter-spacing: clamp(1px, 0.16vw, 3px);
+    letter-spacing: 2.5px;
     font-weight: 400;
     text-shadow: 0 0 12px var(--curve-glow);
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .title-glyph {
@@ -102,37 +138,29 @@ body {
 
 .header-group {
     display: flex;
-    gap: clamp(4px, 0.42vw, 8px);
+    gap: 8px;
     align-items: center;
-    flex-wrap: wrap;
     min-width: 0;
-    padding-left: clamp(6px, 0.83vw, 16px);
+    flex: 1;
+    margin-left: 4px;
+    padding-left: 12px;
     border-left: 1px solid var(--border-color);
 }
 
-/* User info in header */
-.user-info {
-    display: flex;
-    align-items: center;
-    gap: clamp(4px, 0.52vw, 10px);
-    margin-left: auto;
+#thread-selector {
+    flex: 0 1 320px;
     min-width: 0;
-    padding-left: clamp(6px, 0.83vw, 16px);
-    border-left: 1px solid var(--border-color);
 }
 
-.username-display {
-    color: var(--curve-color);
-    font-family: var(--font-heading);
-    font-size: clamp(10px, 0.73vw, 14px);
-    letter-spacing: 0.5px;
-    max-width: clamp(50px, 10vw, 220px);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* Pushes the overflow button to the far edge */
+.header-spacer {
+    flex: 1;
+    min-width: 0;
 }
 
-/* Buttons */
+/* =============================================================
+   Buttons
+   ============================================================= */
 .btn {
     padding: 8px 14px;
     border: 1px solid var(--border-color);
@@ -143,39 +171,39 @@ body {
     font-size: 14px;
     font-family: var(--font-heading);
     letter-spacing: 0.3px;
+    white-space: nowrap;
     transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-
-.btn:hover {
-    color: var(--text-color);
-    border-color: var(--curve-color);
 }
 
 .btn:active {
     transform: translateY(1px);
+    background: var(--btn-bg);
+    color: var(--text-color);
 }
 
+/* Primary = the glyph light. A lit surface rather than a flat neon slab -
+   full-strength --curve-color over a large fill is glaring. */
 .btn-primary {
-    background: var(--accent-color);
-    border-color: var(--accent-color);
-    color: #1a1005;
+    background: linear-gradient(180deg, #1ac9e8 0%, #0aa3c2 100%);
+    border-color: #1ac9e8;
+    color: var(--on-curve);
     font-weight: 600;
+    box-shadow: 0 0 14px rgba(0, 217, 255, 0.2);
 }
 
-.btn-primary:hover {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
-    color: #1a1005;
+.btn-primary:active {
+    background: #0aa3c2;
+    color: var(--on-curve);
 }
 
 .btn-danger {
-    border-color: rgba(231, 76, 60, 0.5);
+    border-color: rgba(226, 97, 76, 0.45);
     color: var(--danger-color);
 }
 
-.btn-danger:hover {
-    background: var(--danger-color);
-    border-color: var(--danger-color);
+.btn-danger:active {
+    background: var(--danger-hover);
+    border-color: var(--danger-hover);
     color: #fff;
 }
 
@@ -184,7 +212,64 @@ body {
     font-size: 12px;
 }
 
-/* Select */
+/* Square icon buttons in the header (new thread, overflow) */
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    flex-shrink: 0;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 8px 12px;
+}
+
+.btn-icon svg {
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+}
+
+/* Unread marker on the overflow button, so collapsing Friends into
+   the menu doesn't hide its badge */
+#header-menu-btn {
+    position: relative;
+}
+
+#header-menu-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--curve-color);
+    box-shadow: 0 0 7px var(--curve-glow);
+}
+
+@media (hover: hover) {
+    .btn:hover {
+        color: var(--text-color);
+        border-color: var(--curve-color);
+        background: var(--btn-bg);
+    }
+
+    .btn-primary:hover {
+        background: linear-gradient(180deg, #4ce6ff 0%, #14b8d8 100%);
+        border-color: #4ce6ff;
+        color: var(--on-curve);
+    }
+
+    .btn-danger:hover {
+        background: var(--danger-color);
+        border-color: var(--danger-color);
+        color: #fff;
+    }
+}
+
+/* =============================================================
+   Select
+   ============================================================= */
 select {
     padding: 8px 12px;
     border: 1px solid var(--border-color);
@@ -192,25 +277,10 @@ select {
     background: var(--bg-color);
     color: var(--text-color);
     font-size: 14px;
-    min-width: 200px;
-    max-width: min(360px, 100%);
+    font-family: inherit;
+    max-width: 100%;
     cursor: pointer;
     transition: border-color 0.15s;
-}
-
-/* Explicit fluid width: under flex-wrap, line-breaking uses the item's
-   content size, so the selector must actually be narrower (not merely
-   shrinkable) for the header to fit on one line. */
-#thread-selector {
-    flex: 0 1 auto;
-    width: clamp(140px, 18vw, 360px);
-    min-width: 90px;
-    font-size: clamp(10px, 0.73vw, 14px);
-    padding: 8px clamp(5px, 0.63vw, 12px);
-}
-
-select:hover {
-    border-color: var(--btn-hover);
 }
 
 select:focus {
@@ -218,14 +288,118 @@ select:focus {
     border-color: var(--curve-color);
 }
 
-/* Main layout */
+@media (hover: hover) {
+    select:hover {
+        border-color: var(--border-strong);
+    }
+}
+
+/* =============================================================
+   Overflow menu
+   Dropdown anchored under the header on wide screens, bottom
+   sheet on phones.
+   ============================================================= */
+#header-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 3, 2, 0.5);
+    z-index: 900;
+}
+
+#header-menu {
+    position: fixed;
+    top: calc(var(--header-h) + var(--safe-t) + 6px);
+    right: max(12px, var(--safe-r));
+    width: 244px;
+    max-height: calc(100dvh - var(--header-h) - var(--safe-t) - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(180deg, #241811 0%, var(--panel-solid) 60%);
+    box-shadow: var(--stone-lip), 0 18px 50px rgba(0, 0, 0, 0.6);
+    z-index: 950;
+    animation: menu-in 140ms ease-out;
+}
+
+@keyframes menu-in {
+    from { opacity: 0; transform: translateY(-6px); }
+}
+
+/* Menu rows: the same <button class="btn"> elements, restyled */
+#header-menu .btn {
+    width: 100%;
+    text-align: left;
+    border-color: transparent;
+    background: transparent;
+    padding: 11px 12px;
+    font-size: 14px;
+    border-radius: 6px;
+}
+
+#header-menu .btn:active {
+    background: var(--btn-hover);
+    transform: none;
+}
+
+@media (hover: hover) {
+    #header-menu .btn:hover {
+        background: var(--btn-hover);
+        border-color: transparent;
+        color: var(--text-color);
+    }
+
+    #header-menu .btn-danger:hover {
+        background: var(--danger-hover);
+        color: #fff;
+    }
+}
+
+.menu-user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-heading);
+    font-size: 13px;
+    color: var(--curve-color);
+    letter-spacing: 0.5px;
+}
+
+.menu-user .username-display {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Only draw the divider when the danger group actually has a
+   visible item - these buttons are .hidden until a thread is open */
+.menu-group-danger:has(> .btn:not(.hidden)) {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* =============================================================
+   Main layout
+   ============================================================= */
 #main {
     display: flex;
     flex: 1;
     min-height: 0;
+    position: relative;
+    /* The same clay the canvas paints. The sidebar is translucent, so this is
+       what actually shows through it - without it the "glass" is just black. */
+    background: radial-gradient(circle at 30% 40%, #6b3a24 0%, #3b2016 55%, #1b0f0b 100%);
 }
 
-/* Canvas container */
 #canvas-container {
     flex: 1;
     /* Allow shrinking: the canvas's inline pixel size must not lock the
@@ -243,58 +417,114 @@ select:focus {
     height: 100%;
     display: block;
     touch-action: none;
+    /* A translate hold lasts seconds - long enough for iOS to fire its
+       callout/magnifier and abort the gesture via touchcancel */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 /* Canvas view controls (zoom / fit) */
 #canvas-controls {
     position: absolute;
-    right: 16px;
-    bottom: 16px;
+    right: max(16px, var(--safe-r));
+    bottom: max(16px, var(--safe-b));
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     z-index: 50;
 }
 
 .canvas-control-btn {
-    width: 34px;
-    height: 34px;
-    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
     border: 1px solid var(--border-color);
-    background: rgba(11, 17, 32, 0.75);
+    background: rgba(22, 16, 13, 0.78);
     color: var(--text-muted);
-    font-size: 17px;
-    line-height: 1;
     cursor: pointer;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
     transition: color 0.15s, border-color 0.15s;
 }
 
-.canvas-control-btn:hover {
+.canvas-control-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.canvas-control-btn:active {
     color: var(--curve-color);
     border-color: var(--curve-color);
 }
 
-/* Translation panel */
+@media (hover: hover) {
+    .canvas-control-btn:hover {
+        color: var(--curve-color);
+        border-color: var(--curve-color);
+    }
+}
+
+/* =============================================================
+   Translation panel
+   Desktop: a 320px sidebar. Mobile: a draggable bottom sheet
+   (see the responsive block at the end).
+   ============================================================= */
 #translation-panel {
     width: 320px;
-    background: var(--panel-bg);
+    flex-shrink: 0;
+    /* Warm at the top where the wall light falls, settling into shadow -
+       flat translucent black over the clay just reads muddy */
+    background: linear-gradient(180deg,
+        rgba(52, 34, 25, 0.74) 0%,
+        rgba(28, 19, 15, 0.84) 55%,
+        rgba(22, 15, 12, 0.88) 100%);
     border-left: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
+}
+
+/* Very low-opacity grain, so the panel reads as light projected on
+   stone rather than a flat div */
+#translation-panel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    background-image: radial-gradient(rgba(255, 220, 190, 0.05) 1px, transparent 1px);
+    background-size: 3px 3px;
+}
+
+@media (min-width: 901px) and (prefers-reduced-transparency: no-preference) {
+    #translation-panel {
+        backdrop-filter: blur(20px) saturate(1.15);
+        -webkit-backdrop-filter: blur(20px) saturate(1.15);
+    }
+}
+
+/* Drag handle - only meaningful in sheet mode */
+#sheet-handle {
+    display: none;
 }
 
 #panel-header {
     padding: 18px 20px 14px;
     border-bottom: 1px solid var(--border-color);
+    position: relative;
+    flex-shrink: 0;
 }
 
 .panel-header-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
     margin-bottom: 8px;
 }
 
@@ -329,6 +559,12 @@ select:focus {
     vertical-align: 1px;
 }
 
+/* Fully translated: the marker dot shifts to the translated purple */
+#writer-name.translated::before {
+    background: var(--translated-color);
+    box-shadow: 0 0 6px var(--translated-glow);
+}
+
 /* Thin translation progress bar under the panel header */
 #translation-progress {
     margin-top: 10px;
@@ -345,18 +581,32 @@ select:focus {
     box-shadow: 0 0 6px var(--curve-glow);
 }
 
+/* One-line preview shown only while the sheet is collapsed to peek */
+#peek-preview {
+    display: none;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 #message-content {
     flex: 1;
     padding: 20px;
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior: contain;
     word-wrap: break-word;
     overflow-wrap: break-word;
 }
 
 #message-content p {
-    font-size: 15px;
+    font-size: 16px;
     line-height: 1.75;
+    text-wrap: pretty;
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
@@ -422,22 +672,30 @@ select:focus {
     line-height: 1.7;
 }
 
-/* Modals */
+/* =============================================================
+   Modals
+   ============================================================= */
 .modal {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(4, 6, 12, 0.6);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    background: rgba(6, 4, 3, 0.62);
     display: flex;
     justify-content: center;
     align-items: center;
     padding: 16px;
+    padding-bottom: max(16px, var(--safe-b));
     overflow-y: auto;
     z-index: 1000;
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+    .modal {
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+    }
 }
 
 .modal.hidden {
@@ -445,19 +703,29 @@ select:focus {
 }
 
 .modal-content {
-    background: var(--bg-secondary);
+    background: var(--panel-solid);
     padding: 26px;
-    border-radius: 10px;
-    width: 90%;
+    border-radius: 12px;
+    width: 100%;
     max-width: 450px;
     max-height: calc(100vh - 32px);
     max-height: calc(100dvh - 32px);
     overflow-y: auto;
+    overscroll-behavior: contain;
     border: 1px solid var(--border-color);
     box-shadow:
-        0 0 40px rgba(0, 217, 255, 0.06),
-        0 20px 60px rgba(0, 0, 0, 0.5);
+        var(--stone-lip),
+        0 0 40px rgba(0, 217, 255, 0.05),
+        0 20px 60px rgba(0, 0, 0, 0.55);
     animation: modal-in 180ms ease-out;
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+    .modal-content {
+        background: var(--panel-bg);
+        backdrop-filter: blur(24px) saturate(1.15);
+        -webkit-backdrop-filter: blur(24px) saturate(1.15);
+    }
 }
 
 @keyframes modal-in {
@@ -481,7 +749,9 @@ select:focus {
     letter-spacing: 1.5px;
 }
 
-/* Forms */
+/* =============================================================
+   Forms
+   ============================================================= */
 .form-group {
     margin-bottom: 16px;
 }
@@ -501,7 +771,9 @@ select:focus {
     border-radius: 6px;
     background: var(--bg-color);
     color: var(--text-color);
-    font-size: 14px;
+    /* 16px minimum: iOS Safari auto-zooms the viewport on focus for
+       anything smaller, and the zoom does not come back */
+    font-size: 16px;
     font-family: inherit;
     transition: border-color 0.15s;
 }
@@ -515,11 +787,12 @@ select:focus {
 .form-group textarea {
     resize: vertical;
     min-height: 100px;
+    line-height: 1.6;
 }
 
 /* Hints (used inside and outside form groups) */
 .hint {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-muted);
 }
 
@@ -532,11 +805,12 @@ select:focus {
     justify-content: flex-end;
     gap: 10px;
     margin-top: 20px;
+    flex-wrap: wrap;
 }
 
 /* Inline error banner (login page and forms) */
 .inline-error {
-    background: rgba(231, 76, 60, 0.12);
+    background: rgba(226, 97, 76, 0.12);
     border: 1px solid var(--danger-color);
     color: var(--danger-color);
     padding: 10px 14px;
@@ -554,7 +828,7 @@ select:focus {
 .checkbox-label {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 14px;
     color: var(--text-muted);
     cursor: pointer;
@@ -563,20 +837,36 @@ select:focus {
     transition: color 0.2s;
 }
 
-.checkbox-label:hover {
-    color: var(--text-color);
-}
-
 .checkbox-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
     accent-color: var(--curve-color);
     cursor: pointer;
 }
 
-/* Utility */
+@media (hover: hover) {
+    .checkbox-label:hover {
+        color: var(--text-color);
+    }
+}
+
+/* =============================================================
+   Utility
+   ============================================================= */
 .hidden {
     display: none !important;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 /* Keyboard focus */
@@ -584,15 +874,19 @@ select:focus {
 .tab:focus-visible,
 .friends-tab:focus-visible,
 .canvas-control-btn:focus-visible,
-select:focus-visible {
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
     outline: 2px solid var(--curve-color);
     outline-offset: 2px;
 }
 
-/* Toasts */
+/* =============================================================
+   Toasts
+   ============================================================= */
 #toast-container {
     position: fixed;
-    bottom: 24px;
+    bottom: calc(24px + var(--safe-b));
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -608,14 +902,14 @@ select:focus-visible {
     max-width: min(440px, calc(100vw - 40px));
     padding: 10px 18px;
     border-radius: 6px;
-    background: rgba(10, 14, 26, 0.94);
+    background: rgba(16, 11, 9, 0.95);
     border: 1px solid var(--border-color);
     color: var(--text-color);
     font-size: 14px;
     line-height: 1.5;
     overflow-wrap: anywhere;
     cursor: pointer;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
     animation: toast-in 200ms ease-out;
 }
 
@@ -631,7 +925,7 @@ select:focus-visible {
 
 .toast-error {
     border-color: var(--danger-color);
-    box-shadow: 0 0 14px rgba(231, 76, 60, 0.15), 0 6px 24px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 14px rgba(226, 97, 76, 0.18), 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 .toast-out {
@@ -652,7 +946,9 @@ select:focus-visible {
     }
 }
 
-/* Scrollbar styling */
+/* =============================================================
+   Scrollbars
+   ============================================================= */
 ::-webkit-scrollbar {
     width: 8px;
 }
@@ -667,40 +963,110 @@ select:focus-visible {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--btn-bg);
+    background: var(--border-strong);
 }
 
-/* Collision modal */
+@supports (scrollbar-width: thin) {
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-color) transparent;
+    }
+}
+
+/* =============================================================
+   Collision modal
+   ============================================================= */
 .collision-modal-content {
     max-width: 400px;
 }
 
-.collision-modal-content p {
-    color: var(--text-muted);
-    margin-bottom: 20px;
-    line-height: 1.5;
+/* Confirmations can open on top of another modal (e.g. removing a friend
+   from inside the friends dialog) */
+#confirm-modal {
+    z-index: 1100;
 }
 
-/* Drawing status indicator on canvas */
+.collision-modal-content p,
+.confirm-modal-content p {
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    line-height: 1.6;
+}
+
+/* =============================================================
+   Drawing HUD
+   Instruction pill at the top (read once, out of thumb range) and
+   the live controls docked at the bottom where they can be
+   reached. The old single bottom-centered pill collided with both
+   the toasts and the zoom buttons.
+   ============================================================= */
 .drawing-status {
     position: absolute;
-    bottom: 24px;
+    top: calc(14px + var(--safe-t));
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(6, 8, 15, 0.85);
+    max-width: min(92vw, 460px);
+    text-align: center;
+    background: rgba(10, 7, 5, 0.88);
     color: var(--accent-color);
-    padding: 10px 20px;
-    border-radius: 20px;
-    font-size: 14px;
+    padding: 9px 18px;
+    border-radius: 18px;
+    font-size: 13px;
+    line-height: 1.45;
     font-family: var(--font-heading);
     border: 1px solid var(--accent-color);
     box-shadow: 0 0 16px rgba(255, 154, 60, 0.25);
     pointer-events: none;
     z-index: 100;
+}
+
+#drawing-controls {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(18px + var(--safe-b));
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 14px;
+    background: rgba(10, 7, 5, 0.9);
+    border: 1px solid var(--accent-color);
+    box-shadow: 0 0 16px rgba(255, 154, 60, 0.2);
+    z-index: 110;
+    max-width: min(94vw, 460px);
+}
+
+#drawing-controls .curl-label {
+    font-family: var(--font-heading);
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
     white-space: nowrap;
 }
 
-/* Friends modal */
+#curl-slider {
+    flex: 1 1 120px;
+    min-width: 90px;
+    height: 28px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+}
+
+#drawing-controls .btn {
+    padding: 7px 11px;
+    font-size: 13px;
+    min-height: 38px;
+}
+
+#curl-dir-btn {
+    min-width: 42px;
+}
+
+/* =============================================================
+   Friends / collaborators
+   ============================================================= */
 .friends-modal-content {
     max-width: 500px;
 }
@@ -715,7 +1081,7 @@ select:focus-visible {
 }
 
 .friends-tab {
-    padding: 6px 14px;
+    padding: 9px 14px;
     border: none;
     border-radius: 4px 4px 0 0;
     background: transparent;
@@ -723,17 +1089,20 @@ select:focus-visible {
     cursor: pointer;
     font-size: 14px;
     font-family: var(--font-heading);
+    white-space: nowrap;
     transition: color 0.2s, background 0.2s;
     position: relative;
-}
-
-.friends-tab:hover {
-    color: var(--text-color);
 }
 
 .friends-tab.active {
     color: var(--curve-color);
     background: rgba(0, 217, 255, 0.1);
+}
+
+@media (hover: hover) {
+    .friends-tab:hover {
+        color: var(--text-color);
+    }
 }
 
 .friends-tab-content {
@@ -755,6 +1124,7 @@ select:focus-visible {
 .friends-list {
     max-height: 250px;
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .friend-row,
@@ -763,6 +1133,7 @@ select:focus-visible {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     padding: 8px 12px;
     border-radius: 4px;
     margin-bottom: 4px;
@@ -771,10 +1142,12 @@ select:focus-visible {
     transition: border-color 0.15s;
 }
 
-.friend-row:hover,
-.request-row:hover,
-.search-result-row:hover {
-    border-color: var(--curve-color);
+@media (hover: hover) {
+    .friend-row:hover,
+    .request-row:hover,
+    .search-result-row:hover {
+        border-color: var(--curve-color);
+    }
 }
 
 .friend-username {
@@ -791,7 +1164,6 @@ select:focus-visible {
     display: flex;
     gap: 6px;
     flex-shrink: 0;
-    margin-left: 8px;
 }
 
 /* Badge (notification count) */
@@ -803,8 +1175,8 @@ select:focus-visible {
     height: 18px;
     padding: 0 5px;
     border-radius: 9px;
-    background: var(--accent-color);
-    color: #1a1005;
+    background: var(--curve-color);
+    color: var(--on-curve);
     font-size: 11px;
     font-weight: bold;
     margin-left: 4px;
@@ -815,6 +1187,7 @@ select:focus-visible {
 .friends-checklist {
     max-height: 150px;
     overflow-y: auto;
+    overscroll-behavior: contain;
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 8px;
@@ -823,93 +1196,223 @@ select:focus-visible {
 
 .friend-checkbox {
     display: flex;
-    padding: 4px 8px;
+    padding: 6px 8px;
     margin: 0;
 }
 
-/* Responsive */
+/* =============================================================
+   Responsive
+   Single breakpoint at 900/901px. Below it the panel becomes a
+   draggable bottom sheet overlaying a full-height canvas, and the
+   overflow menu docks to the bottom of the screen.
+   ============================================================= */
 @media (max-width: 900px) {
-    #main {
-        flex-direction: column;
-    }
-
-    #translation-panel {
-        width: 100%;
-        height: 38vh;
-        flex-shrink: 0;
-        border-left: none;
-        border-top: 1px solid var(--border-color);
-    }
-}
-
-/* Narrow desktop: not even fully compressed controls fit next to the app
-   name, so collapse the title to its glyph to keep the header on one row. */
-@media (min-width: 601px) and (max-width: 1023px) {
     .header-title {
-        font-size: 0;
-        gap: 0;
+        letter-spacing: 2px;
+        font-size: 1rem;
+    }
+
+    .header-group {
+        margin-left: 0;
+        padding-left: 8px;
+    }
+
+    /* Overflow menu becomes a bottom sheet */
+    #header-menu {
+        top: auto;
+        right: 0;
+        left: 0;
+        bottom: 0;
+        width: auto;
+        max-height: min(80dvh, 560px);
+        padding: 10px 10px calc(10px + var(--safe-b));
+        padding-left: max(10px, var(--safe-l));
+        padding-right: max(10px, var(--safe-r));
+        border-radius: 16px 16px 0 0;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        animation: sheet-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+    }
+
+    #header-menu .btn {
+        padding: 13px 14px;
+        font-size: 15px;
+    }
+
+    @keyframes sheet-in {
+        from { transform: translateY(100%); }
+    }
+
+    /* --- Translation panel as a bottom sheet --- */
+    #translation-panel {
+        position: absolute;
+        inset: auto 0 0 0;
+        width: auto;
+        height: calc(100% - 8px);
+        border-left: none;
+        border-top: 1px solid var(--border-strong);
+        border-radius: 16px 16px 0 0;
+        /* Opaque here: it slides over a live canvas, so any translucency
+           both costs a blur and lets the wall fight the text */
+        background: linear-gradient(180deg, #2b1d16 0%, #1d1410 40%, #170f0c 100%);
+        box-shadow: var(--stone-lip), 0 -12px 40px rgba(0, 0, 0, 0.5);
+        z-index: 70;
+        /* Set by BottomSheet; falls back to peek before JS runs */
+        transform: translateY(calc(100% - var(--sheet-peek)));
+    }
+
+    /* Only the grab areas swallow vertical gestures - #message-content
+       must keep its native scrolling */
+    #sheet-handle,
+    #panel-header {
+        touch-action: none;
+    }
+
+    #message-content {
+        touch-action: pan-y;
+    }
+
+    #translation-panel.sheet-animating {
+        transition: transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
+    }
+
+    #sheet-handle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 22px;
+        flex-shrink: 0;
+        cursor: grab;
+    }
+
+    #sheet-handle::before {
+        content: '';
+        width: 40px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--border-strong);
+    }
+
+    #panel-header {
+        padding: 2px 18px 14px;
+    }
+
+    /* At peek only the header is on screen, so show a preview line
+       there instead of leaving dead space */
+    #translation-panel.sheet-peek #peek-preview:not(:empty) {
+        display: block;
+    }
+
+    #translation-panel.sheet-peek #message-content {
+        overflow: hidden;
+    }
+
+    /* Keep the zoom controls clear of the collapsed sheet, and get them out
+       of the way entirely once it is raised - they would otherwise ghost
+       through the sheet */
+    #canvas-controls {
+        bottom: calc(var(--sheet-peek) + 12px);
+        transition: opacity 180ms ease;
+    }
+
+    #main:has(#translation-panel.sheet-half) #canvas-controls,
+    #main:has(#translation-panel.sheet-full) #canvas-controls {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    /* The sheet is full-height and slid down, so content laid out for the
+       full height sits below the fold at the smaller snaps. Text starts at
+       the top anyway; the centred empty state has to be pulled up. */
+    .panel-empty {
+        height: auto;
+        justify-content: flex-start;
+        padding-top: 28px;
+    }
+
+    #toast-container {
+        bottom: calc(var(--sheet-peek) + 16px);
+    }
+
+    /* Sit above the collapsed sheet, not on top of it */
+    #drawing-controls {
+        bottom: calc(var(--sheet-peek) + 14px);
+    }
+
+    /* The controls bar wants that whole strip; pinch still zooms */
+    body.is-drawing #canvas-controls {
+        display: none;
     }
 }
 
 @media (max-width: 600px) {
-    #header {
-        padding: 8px 12px;
-        gap: 8px 12px;
-    }
-
+    /* The title text is the first thing worth losing - the glyph
+       still identifies the app */
     .header-title {
-        width: 100%;
-        font-size: 1rem;
-        letter-spacing: 2px;
+        font-size: 0;
+        gap: 0;
     }
 
-    .header-group {
-        width: 100%;
-        padding-left: 0;
-        border-left: none;
-    }
-
-    .user-info {
-        width: 100%;
-        margin-left: 0;
-        padding-left: 0;
-        border-left: none;
+    #header {
         gap: 6px;
     }
 
-    .username-display {
-        flex: 1 1 80px;
-        min-width: 0;
-        max-width: none;
-        font-size: 13px;
-        overflow: hidden;
-        text-overflow: ellipsis;
+    .header-group {
+        gap: 6px;
+        padding-left: 8px;
     }
 
-    #thread-selector {
-        flex: 1 1 220px;
-        width: auto;
-        min-width: 0;
-        max-width: 100%;
-        font-size: 13px;
-        padding: 8px 12px;
+    /* Primary action collapses to its icon */
+    #new-thread-btn .btn-label {
+        display: none;
     }
 
-    /* The header wraps into full-width rows here, so undo the fluid
-       compression and keep controls at comfortable tap sizes. */
-    .btn,
-    #header .btn {
-        padding: 6px 10px;
+    #new-thread-btn {
+        padding: 8px 11px;
+    }
+}
+
+/* Comfortable targets wherever there is no precise pointer */
+@media (pointer: coarse) {
+    .btn {
+        min-height: 40px;
+    }
+
+    .btn-small {
+        min-height: 36px;
+        padding: 6px 12px;
         font-size: 13px;
     }
 
-    #header .btn-small {
-        padding: 4px 8px;
-        font-size: 12px;
+    select,
+    .form-group input,
+    .form-group textarea {
+        font-size: 16px;
+        min-height: 42px;
     }
 
-    select {
-        min-width: 130px;
-        font-size: 13px;
+    .friends-tab {
+        min-height: 40px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-content,
+    #header-menu,
+    .toast {
+        animation: none;
+    }
+
+    #translation-panel.sheet-animating {
+        transition: none;
+    }
+
+    #message-content.translating p:last-of-type::after {
+        animation: none;
+    }
+
+    .btn:active {
+        transform: none;
     }
 }

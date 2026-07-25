@@ -4,15 +4,38 @@
 
 // Translation panel copy (single source so the strings can't drift apart)
 const COPY_HOLD_TO_TRANSLATE = 'Hold on a spiral to translate it…';
-const COPY_PANEL_EMPTY = `
-    <div class="panel-empty">
-        <svg viewBox="0 0 48 48" aria-hidden="true">
-            <path d="M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0"
-                  fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-        </svg>
-        <p>Select a glyph to begin</p>
-        <p class="hint">Hold a spiral to translate it.<br>Double-click one to write a reply.</p>
-    </div>`;
+
+// Touch and mouse get different instructions - "scroll to adjust" and
+// "double-click" are unreachable on a phone.
+const IS_COARSE = typeof window.matchMedia === 'function' &&
+    window.matchMedia('(pointer: coarse)').matches;
+
+// Past this much progress a translation keeps running after release. A
+// 500-character message is 20 seconds at 25 chars/sec, and holding a finger
+// still for that long is not a gesture anyone completes on a phone - so the
+// hold is what commits to the translation, not what powers it.
+const TRANSLATION_LATCH_AT = 0.15;
+
+/**
+ * Build the translation panel's empty state from its <template>, so the
+ * markup exists in exactly one place.
+ */
+function panelEmptyNode() {
+    const tpl = document.getElementById('panel-empty-template');
+    const node = tpl.content.cloneNode(true);
+    const hint = node.querySelector('.hint');
+    if (hint) {
+        hint.innerHTML = IS_COARSE ? hint.dataset.hintCoarse : hint.dataset.hintFine;
+    }
+    return node;
+}
+
+/** Short haptic tick, where the device supports it. */
+function haptic(pattern) {
+    if (!navigator.vibrate) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    navigator.vibrate(pattern);
+}
 
 class NomaiApp {
     constructor() {
@@ -54,8 +77,22 @@ class NomaiApp {
             onDrawingCancel: () => this.handleDrawingCancel()
         });
 
+        // Translation panel becomes a draggable sheet below 900px
+        this.sheet = new BottomSheet(document.getElementById('translation-panel'), {
+            grabs: [
+                document.getElementById('sheet-handle'),
+                document.getElementById('panel-header')
+            ],
+            scroller: document.getElementById('message-content'),
+            onSnap: () => this.syncCanvasInsets()
+        });
+        this.syncCanvasInsets();
+
         // Bind UI events
         this.bindUIEvents();
+
+        // Paint the panel's empty state (its markup lives in a <template>)
+        this.updateTranslationPanel(null);
 
         // Load user info
         await this.loadUserInfo();
@@ -106,6 +143,8 @@ class NomaiApp {
      * Bind UI event handlers.
      */
     bindUIEvents() {
+        this.bindHeaderMenu();
+
         // Thread selector
         document.getElementById('thread-selector').addEventListener('change', (e) => {
             const threadId = e.target.value;
@@ -278,10 +317,16 @@ class NomaiApp {
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Escape') return;
             if (this.interaction && this.interaction.isDrawing()) return;
+            if (this.isHeaderMenuOpen()) {
+                this.hideHeaderMenu();
+                document.getElementById('header-menu-btn').focus();
+                return;
+            }
             const hideFns = {
                 'message-modal': () => this.hideMessageModal(),
                 'thread-modal': () => this.hideThreadModal(),
                 'collision-modal': () => this.hideCollisionModal(),
+                'confirm-modal': () => this.pendingConfirmCancel && this.pendingConfirmCancel(),
                 'friends-modal': () => this.hideFriendsModal(),
                 'collaborators-modal': () => this.hideCollaboratorsModal(),
                 'settings-modal': () => this.hideSettingsModal()
@@ -289,6 +334,201 @@ class NomaiApp {
             const open = document.querySelector('.modal:not(.hidden)');
             if (open && hideFns[open.id]) hideFns[open.id]();
         });
+
+        this.bindDrawingControls();
+    }
+
+    /**
+     * On-canvas controls for spiral drawing.
+     *
+     * Curl was previously bound only to the mouse wheel and cancel only to
+     * Escape, so on a touch device the curl was stuck at its default and there
+     * was no way out of drawing mode at all.
+     */
+    bindDrawingControls() {
+        const slider = document.getElementById('curl-slider');
+        const dirBtn = document.getElementById('curl-dir-btn');
+        const cancelBtn = document.getElementById('draw-cancel-btn');
+
+        slider.addEventListener('input', (e) => {
+            this.interaction.setCurvature(parseFloat(e.target.value));
+        });
+        dirBtn.addEventListener('click', () => {
+            this.interaction.toggleCurvatureDir();
+            this.syncDrawingControls();
+        });
+        cancelBtn.addEventListener('click', () => {
+            this.interaction.cancelDrawing();
+        });
+    }
+
+    /**
+     * Show or hide the drawing controls and mirror the handler's current
+     * curl/direction into them.
+     */
+    syncDrawingControls(visible = null) {
+        const bar = document.getElementById('drawing-controls');
+        if (!bar) return;
+
+        const show = visible === null
+            ? this.interaction.getDrawingState() === InteractionHandler.STATE_DRAWING_SPIRAL
+            : visible;
+        bar.classList.toggle('hidden', !show);
+        document.body.classList.toggle('is-drawing', this.interaction.isDrawing());
+        if (!show) return;
+
+        document.getElementById('curl-slider').value = this.interaction.previewCurvature;
+        document.getElementById('curl-dir-btn').textContent =
+            this.interaction.previewCurvatureDir === 1 ? '↻' : '↺';
+    }
+
+    /**
+     * Tell the canvas how much of it the collapsed sheet covers, so fitting
+     * frames content in the part that is actually visible.
+     */
+    syncCanvasInsets() {
+        if (!this.sheet || !this.sheet.enabled) {
+            this.canvas.setViewInsets(null);
+            return;
+        }
+        const peek = parseInt(
+            getComputedStyle(document.documentElement).getPropertyValue('--sheet-peek'), 10
+        );
+        this.canvas.setViewInsets({ bottom: Number.isFinite(peek) ? peek : 96 });
+    }
+
+    // =========================================================================
+    // Overflow menu
+    // =========================================================================
+
+    /**
+     * Bind the header overflow menu. Every secondary control lives in here at
+     * all widths, which is what lets the visible header stay at a readable
+     * size instead of being clamped down to fit ten buttons.
+     */
+    bindHeaderMenu() {
+        const btn = document.getElementById('header-menu-btn');
+        const menu = document.getElementById('header-menu');
+        const backdrop = document.getElementById('header-menu-backdrop');
+
+        btn.addEventListener('click', () => this.toggleHeaderMenu());
+        backdrop.addEventListener('click', () => this.hideHeaderMenu());
+
+        // Any action inside the menu closes it; the handlers themselves are
+        // bound separately in bindUIEvents()
+        menu.addEventListener('click', (e) => {
+            if (e.target.closest('.btn')) this.hideHeaderMenu();
+        });
+    }
+
+    toggleHeaderMenu() {
+        const menu = document.getElementById('header-menu');
+        if (menu.classList.contains('hidden')) this.showHeaderMenu();
+        else this.hideHeaderMenu();
+    }
+
+    showHeaderMenu() {
+        document.getElementById('header-menu').classList.remove('hidden');
+        document.getElementById('header-menu-backdrop').classList.remove('hidden');
+        document.getElementById('header-menu-btn').setAttribute('aria-expanded', 'true');
+    }
+
+    hideHeaderMenu() {
+        document.getElementById('header-menu').classList.add('hidden');
+        document.getElementById('header-menu-backdrop').classList.add('hidden');
+        document.getElementById('header-menu-btn').setAttribute('aria-expanded', 'false');
+    }
+
+    isHeaderMenuOpen() {
+        return !document.getElementById('header-menu').classList.contains('hidden');
+    }
+
+    // =========================================================================
+    // Confirmation dialog
+    // =========================================================================
+
+    /**
+     * Styled replacement for native confirm(), which is unreadable on mobile
+     * and breaks out of the app's visual language.
+     * @returns {Promise<boolean>}
+     */
+    confirmDialog(message, { title = 'Confirm', confirmLabel = 'Delete' } = {}) {
+        const modal = document.getElementById('confirm-modal');
+        const okBtn = document.getElementById('confirm-ok-btn');
+        const cancelBtn = document.getElementById('confirm-cancel-btn');
+
+        document.getElementById('confirm-modal-title').textContent = title;
+        document.getElementById('confirm-modal-body').textContent = message;
+        okBtn.textContent = confirmLabel;
+
+        // Focus Cancel, not the destructive button - Enter should never be
+        // what deletes a thread
+        this.openModal(modal);
+        cancelBtn.focus();
+
+        return new Promise((resolve) => {
+            const done = (result) => {
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                modal.removeEventListener('click', onBackdrop);
+                this.closeModal(modal);
+                resolve(result);
+            };
+            const onOk = () => done(true);
+            const onCancel = () => done(false);
+            const onBackdrop = (e) => {
+                if (e.target === modal) done(false);
+            };
+
+            this.pendingConfirmCancel = onCancel;
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            modal.addEventListener('click', onBackdrop);
+        });
+    }
+
+    // =========================================================================
+    // Modal focus management
+    // =========================================================================
+
+    /**
+     * Show a modal and trap focus inside it. The dialogs are marked
+     * aria-modal, but nothing was stopping Tab from walking out into the
+     * page behind them.
+     */
+    openModal(modal) {
+        this.lastFocused = document.activeElement;
+        modal.classList.remove('hidden');
+
+        if (!modal.dataset.trapBound) {
+            modal.addEventListener('keydown', (e) => {
+                if (e.key !== 'Tab') return;
+                const items = modal.querySelectorAll(
+                    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                );
+                const focusable = Array.from(items).filter((el) => el.offsetParent !== null);
+                if (focusable.length === 0) return;
+
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            });
+            modal.dataset.trapBound = '1';
+        }
+    }
+
+    closeModal(modal) {
+        modal.classList.add('hidden');
+        if (this.lastFocused && this.lastFocused.focus) {
+            this.lastFocused.focus();
+            this.lastFocused = null;
+        }
     }
 
     /**
@@ -297,7 +537,7 @@ class NomaiApp {
     async showSettingsModal() {
         const input = document.getElementById('discord-webhook-input');
         input.value = '';
-        document.getElementById('settings-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('settings-modal'));
         try {
             const me = await api.getMe();
             if (me && me.discord_webhook) input.value = me.discord_webhook;
@@ -307,7 +547,7 @@ class NomaiApp {
     }
 
     hideSettingsModal() {
-        document.getElementById('settings-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('settings-modal'));
     }
 
     /**
@@ -420,14 +660,14 @@ class NomaiApp {
      * Show collision warning modal.
      */
     showCollisionModal() {
-        document.getElementById('collision-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('collision-modal'));
     }
 
     /**
      * Hide collision warning modal.
      */
     hideCollisionModal() {
-        document.getElementById('collision-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('collision-modal'));
         this.pendingCollisionConflicts = null;
     }
 
@@ -449,18 +689,30 @@ class NomaiApp {
      * Handle branch point moving along spiral (during selection).
      */
     handleBranchPointMove(parentMessage, point, branchT) {
+        // Drawing takes over from reading: a latched translation would keep
+        // running, and its hold ring would sit in the middle of the gesture
+        this.stopTranslation();
         this.canvas.setBranchPointMarker(point, branchT);
-        this.updateStatusIndicator('Move along spiral to select branch point, click to confirm');
+        this.updateStatusIndicator(IS_COARSE
+            ? 'Drag along the spiral to place the branch, then lift'
+            : 'Move along spiral to select branch point, click to confirm');
+        this.syncDrawingControls(false);
     }
 
     /**
      * Handle branch point confirmed - now entering spiral drawing mode.
      */
     handleBranchPointConfirm(parentMessage, point, branchT) {
+        this.stopTranslation();
         this.drawingParentMessage = parentMessage;
         this.drawingBranchPoint = point;
         this.drawingBranchT = branchT;
-        this.updateStatusIndicator('Drag to set direction & length, scroll to adjust curl, click to confirm');
+        this.updateStatusIndicator(IS_COARSE
+            ? 'Drag to aim, set the curl below, then lift to place'
+            : 'Drag to set direction & length, scroll or use the slider for curl, click to confirm');
+        this.syncDrawingControls(true);
+        // The sheet would sit on top of the controls
+        if (this.sheet) this.sheet.collapse();
     }
 
     /**
@@ -547,7 +799,8 @@ class NomaiApp {
         // Update status indicator - show curl in degrees
         const curlDegrees = Math.round((0.1 + curvature * 0.9) * 720);
         const dirLabel = curvatureDir === 1 ? 'CW' : 'CCW';
-        this.updateStatusIndicator(`Curl: ${curlDegrees}° ${dirLabel} (scroll to adjust)`);
+        this.updateStatusIndicator(`Curl: ${curlDegrees}° ${dirLabel}`);
+        this.syncDrawingControls(true);
     }
 
     /**
@@ -579,6 +832,7 @@ class NomaiApp {
 
         // Clear status indicator
         this.updateStatusIndicator('');
+        this.syncDrawingControls(false);
 
         // Open the modal with parent pre-selected
         this.showMessageModalWithDrawnSpiral();
@@ -596,6 +850,7 @@ class NomaiApp {
         this.drawingBranchPoint = null;
         this.drawingBranchT = null;
         this.updateStatusIndicator('');
+        this.syncDrawingControls(false);
     }
 
     /**
@@ -608,7 +863,7 @@ class NomaiApp {
             return;
         }
 
-        document.getElementById('message-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('message-modal'));
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
     }
@@ -736,7 +991,11 @@ class NomaiApp {
     async handleClearBoard() {
         if (!this.currentThreadId) return;
 
-        if (confirm('Are you sure you want to delete this thread and all its messages?')) {
+        const ok = await this.confirmDialog(
+            'This deletes the thread and every message in it. This cannot be undone.',
+            { title: 'Delete thread', confirmLabel: 'Delete thread' }
+        );
+        if (ok) {
             try {
                 await api.deleteThread(this.currentThreadId);
                 this.clearBoard();
@@ -858,6 +1117,13 @@ class NomaiApp {
      * Handle message selection.
      */
     handleMessageSelect(message) {
+        // Moving to a different glyph ends any latched translation, so its
+        // ring doesn't linger on a spiral you are no longer reading
+        const previous = this.selectedMessage;
+        if (previous && (!message || message.id !== previous.id)) {
+            this.stopTranslation();
+        }
+
         this.selectedMessage = message;
         // Show current translation state (don't animate - wait for mouse down)
         this.updateTranslationPanel(message);
@@ -868,6 +1134,12 @@ class NomaiApp {
         } else {
             deleteBtn.classList.add('hidden');
         }
+
+        // On mobile, bring the sheet up far enough to read into
+        if (this.sheet) {
+            if (message) this.sheet.reveal();
+            else this.sheet.collapse();
+        }
     }
 
     /**
@@ -877,7 +1149,11 @@ class NomaiApp {
         if (!this.selectedMessage) return;
 
         const msg = this.selectedMessage;
-        if (confirm(`Delete "${msg.writer_name}'s" message? This will also delete all replies.`)) {
+        const ok = await this.confirmDialog(
+            `Delete ${msg.writer_name}'s message? Every reply beneath it goes too.`,
+            { title: 'Delete message', confirmLabel: 'Delete' }
+        );
+        if (ok) {
             try {
                 await api.deleteMessage(msg.id);
                 this.clearSelection();
@@ -913,25 +1189,50 @@ class NomaiApp {
     handleMouseDown(message) {
         if (!message) return;
 
+        // A latched translation is already running unattended - pressing it
+        // again is how you pause it.
+        if (this.canvas.isTransitionRunning(message.id)) {
+            this.stopTranslation();
+            return;
+        }
+
         // Duration based on content length only (author shown immediately)
         const duration = this.translationDuration(message.content);
+
+        // Progress ring at the point being pressed. On mobile the panel's
+        // progress bar is behind a collapsed sheet, so without this the
+        // gesture gives no feedback at all.
+        const at = this.interaction && this.interaction.lastCoords;
+        if (at) this.canvas.setHoldIndicator(message.id, at);
 
         // Start spiral color transition
         const startProgress = this.canvas.startTransition(message.id, duration);
 
         // Start text animation from current progress
         this.startTextAnimation(message, startProgress);
+
+        if (startProgress < 1) haptic(8);
     }
 
     /**
-     * Handle mouse up - pause translation.
+     * Handle mouse up. Past the latch point the translation carries on by
+     * itself; before it, releasing pauses as usual.
      */
     handleMouseUp(message) {
-        // Pause spiral transition
-        this.canvas.pauseTransition();
+        if (message && this.canvas.isTransitionRunning(message.id)) {
+            const progress = this.canvas.getTransitionProgress(message.id);
+            if (progress >= TRANSLATION_LATCH_AT && progress < 1) return;
+        }
+        this.stopTranslation();
+    }
 
-        // Pause text animation
+    /**
+     * Pause the spiral transition, the text reveal and the hold ring together.
+     */
+    stopTranslation() {
+        this.canvas.pauseTransition();
         this.pauseTextAnimation();
+        this.canvas.clearHoldIndicator();
     }
 
     /**
@@ -990,6 +1291,8 @@ class NomaiApp {
                 this.textAnimationId = null;
                 this.animatingMessageId = null;
                 contentEl.classList.remove('translating');
+                this.canvas.clearHoldIndicator();
+                haptic([12, 40, 12]);
             }
         };
 
@@ -1018,6 +1321,11 @@ class NomaiApp {
         if (!track || !bar) return;
         track.classList.toggle('hidden', progress <= 0 || progress >= 1);
         bar.style.width = `${Math.min(100, Math.round(progress * 100))}%`;
+
+        const writerEl = document.getElementById('writer-name');
+        if (writerEl) writerEl.classList.toggle('translated', progress >= 1);
+
+        this.updatePeekPreview();
     }
 
     /**
@@ -1046,9 +1354,42 @@ class NomaiApp {
             }
         } else {
             writerEl.textContent = '';
+            writerEl.classList.remove('translated');
             this.setTranslationProgress(0);
-            contentEl.innerHTML = COPY_PANEL_EMPTY;
+            contentEl.replaceChildren(panelEmptyNode());
         }
+        this.updatePeekPreview();
+    }
+
+    /**
+     * One-line summary shown in the panel header while the mobile sheet is
+     * collapsed, so a peeked sheet still carries information.
+     */
+    updatePeekPreview() {
+        const el = document.getElementById('peek-preview');
+        if (!el) return;
+
+        // Only visible on a collapsed mobile sheet - skip the work otherwise
+        // (this runs from the per-frame progress update)
+        if (!this.sheet || !this.sheet.enabled || this.sheet.state !== BottomSheet.PEEK) {
+            if (el.textContent) el.textContent = '';
+            return;
+        }
+
+        const msg = this.selectedMessage;
+        if (!msg) {
+            // The collapsed sheet is otherwise just an empty bar
+            el.textContent = 'Tap a glyph on the wall to begin';
+            return;
+        }
+
+        const progress = this.canvas.getTransitionProgress(msg.id);
+        if (progress <= 0) {
+            el.textContent = 'Press and hold the spiral to translate';
+            return;
+        }
+        const shown = msg.content.slice(0, Math.floor(progress * msg.content.length));
+        el.textContent = shown.replace(/\s+/g, ' ').trim() || 'Translating…';
     }
 
     /**
@@ -1075,7 +1416,7 @@ class NomaiApp {
      * Show thread creation modal.
      */
     async showThreadModal() {
-        document.getElementById('thread-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('thread-modal'));
         document.getElementById('thread-title-input').value = '';
         document.getElementById('thread-title-input').focus();
 
@@ -1101,7 +1442,7 @@ class NomaiApp {
      * Hide thread creation modal.
      */
     hideThreadModal() {
-        document.getElementById('thread-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('thread-modal'));
     }
 
     /**
@@ -1140,7 +1481,7 @@ class NomaiApp {
             return;
         }
 
-        document.getElementById('message-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('message-modal'));
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
 
@@ -1152,7 +1493,7 @@ class NomaiApp {
      * Hide message creation modal.
      */
     hideMessageModal() {
-        document.getElementById('message-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('message-modal'));
 
         // Clear preview if any
         this.canvas.clearPreviewSpiral();
@@ -1211,12 +1552,12 @@ class NomaiApp {
     // =========================================================================
 
     async showFriendsModal() {
-        document.getElementById('friends-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('friends-modal'));
         this.switchFriendsTab('my-friends');
     }
 
     hideFriendsModal() {
-        document.getElementById('friends-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('friends-modal'));
     }
 
     switchFriendsTab(tabName) {
@@ -1369,7 +1710,11 @@ class NomaiApp {
     }
 
     async handleRemoveFriend(friendUserId) {
-        if (!confirm('Remove this friend? They will lose access to your shared threads.')) return;
+        const ok = await this.confirmDialog(
+            'Remove this friend? They will lose access to your shared threads.',
+            { title: 'Remove friend', confirmLabel: 'Remove' }
+        );
+        if (!ok) return;
         try {
             await api.removeFriend(friendUserId);
             this.loadFriendsList();
@@ -1386,6 +1731,9 @@ class NomaiApp {
             const data = await api.getPendingRequestCount();
             const badge = document.getElementById('friend-request-badge');
             const tabBadge = document.getElementById('tab-request-badge');
+            // Friends now lives inside the overflow menu, so surface pending
+            // requests on the menu button itself
+            const menuDot = document.getElementById('header-menu-dot');
             if (data.count > 0) {
                 badge.textContent = data.count;
                 badge.classList.remove('hidden');
@@ -1393,9 +1741,11 @@ class NomaiApp {
                     tabBadge.textContent = data.count;
                     tabBadge.classList.remove('hidden');
                 }
+                if (menuDot) menuDot.classList.remove('hidden');
             } else {
                 badge.classList.add('hidden');
                 if (tabBadge) tabBadge.classList.add('hidden');
+                if (menuDot) menuDot.classList.add('hidden');
             }
         } catch (err) {
             // Silently ignore badge update failures
@@ -1412,12 +1762,12 @@ class NomaiApp {
             return;
         }
 
-        document.getElementById('collaborators-modal').classList.remove('hidden');
+        this.openModal(document.getElementById('collaborators-modal'));
         await this.loadCollaborators();
     }
 
     hideCollaboratorsModal() {
-        document.getElementById('collaborators-modal').classList.add('hidden');
+        this.closeModal(document.getElementById('collaborators-modal'));
     }
 
     async loadCollaborators() {

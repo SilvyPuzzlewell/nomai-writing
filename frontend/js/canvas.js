@@ -49,13 +49,26 @@ class NomaiCanvas {
 
         this.buildWallTile();
         this.resize();
-        window.addEventListener('resize', () => this.resize());
+
+        // window.resize and the ResizeObserver both fire for the same change,
+        // and each resize reallocates a full-viewport lighting canvas - so
+        // coalesce them into one pass per frame.
+        this.resizePending = false;
+        const scheduleResize = () => {
+            if (this.resizePending) return;
+            this.resizePending = true;
+            requestAnimationFrame(() => {
+                this.resizePending = false;
+                this.resize();
+            });
+        };
+        window.addEventListener('resize', scheduleResize);
 
         // Header controls can wrap or become visible after data loads without
         // firing a window resize. Watch the actual container so the canvas
         // bitmap and hit-test coordinates always match its displayed size.
         if (typeof ResizeObserver !== 'undefined') {
-            this.resizeObserver = new ResizeObserver(() => this.resize());
+            this.resizeObserver = new ResizeObserver(scheduleResize);
             this.resizeObserver.observe(this.canvas.parentElement);
         }
     }
@@ -168,7 +181,18 @@ class NomaiCanvas {
      * Fit all spirals (including not-yet-revealed ones, so the view doesn't
      * jump as children appear) into the viewport.
      */
-    fitToContent(padding = 70) {
+    /**
+     * Chrome that overlaps the canvas (the mobile bottom sheet), so fitting
+     * frames content in the part of the canvas that is actually visible.
+     * @param {{top?: number, right?: number, bottom?: number, left?: number}} insets
+     */
+    setViewInsets(insets) {
+        this.viewInsets = Object.assign(
+            { top: 0, right: 0, bottom: 0, left: 0 }, insets || {}
+        );
+    }
+
+    fitToContent(padding = null) {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
         this.messages.forEach(msg => {
@@ -188,12 +212,31 @@ class NomaiCanvas {
 
         const bw = Math.max(maxX - minX, 1);
         const bh = Math.max(maxY - minY, 1);
-        const fitScale = Math.min((this.width - padding * 2) / bw, (this.height - padding * 2) / bh);
+
+        const inset = this.viewInsets || { top: 0, right: 0, bottom: 0, left: 0 };
+        const viewW = Math.max(1, this.width - inset.left - inset.right);
+        const viewH = Math.max(1, this.height - inset.top - inset.bottom);
+
+        // A flat 70px margin eats most of a phone-sized viewport
+        const pad = padding !== null
+            ? padding
+            : Math.max(20, Math.min(70, Math.min(viewW, viewH) * 0.09));
+
+        const fitScale = Math.min(
+            Math.max(1, viewW - pad * 2) / bw,
+            Math.max(1, viewH - pad * 2) / bh
+        );
+
+        // Let the floor drop for a thread that genuinely doesn't fit at 0.2 -
+        // otherwise "fit view" leaves content off-screen and zoom-out is
+        // already clamped, so there's no way to reach it.
+        this.minScale = Math.min(0.2, fitScale * 0.8);
         const scale = Math.max(this.minScale, Math.min(fitScale, 1.25));
 
         this.camera.scale = scale;
-        this.camera.offsetX = this.width / 2 - (minX + bw / 2) * scale;
-        this.camera.offsetY = this.height / 2 - (minY + bh / 2) * scale;
+        // Centre within the visible rect, not the raw canvas
+        this.camera.offsetX = inset.left + viewW / 2 - (minX + bw / 2) * scale;
+        this.camera.offsetY = inset.top + viewH / 2 - (minY + bh / 2) * scale;
         this.render();
     }
 
@@ -315,7 +358,10 @@ class NomaiCanvas {
             return;
         }
 
-        const dpr = window.devicePixelRatio || 1;
+        // Capped at 2: this layer is two broad radial gradients with no
+        // high-frequency detail, and at DPR 3 a phone-sized overlay is a ~12MB
+        // allocation on every resize for no visible gain.
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const off = document.createElement('canvas');
         off.width = Math.max(1, Math.round(w * dpr));
         off.height = Math.max(1, Math.round(h * dpr));
@@ -388,6 +434,14 @@ class NomaiCanvas {
             return;
         }
 
+        // What the viewer is currently looking at. On mobile the URL bar
+        // collapsing fires a resize on almost any gesture, and re-fitting here
+        // used to discard the user's pan and zoom with no way to recover it -
+        // nothing persists the camera.
+        const anchor = (this.width > 0 && this.height > 0)
+            ? this.screenToWorld(this.width / 2, this.height / 2)
+            : null;
+
         this.dpr = dpr;
 
         // Set display size
@@ -415,13 +469,16 @@ class NomaiCanvas {
         // Rebuild the screen-fixed lighting overlay for the new dimensions
         this.buildLighting();
 
-        // Re-layout and render if we have messages
-        if (this.messages.length > 0) {
-            this.relayout();
-            // Relayout re-centers content around the new canvas center, so
-            // refit the camera to keep everything in view
-            this.fitToContent();
+        // Deliberately no relayout here. Layout is anchored to the canvas
+        // centre, so relaying out would shift every spiral in world space and
+        // force a refit. Leaving world space alone means a resize is purely a
+        // change of viewport, and re-anchoring the old centre keeps the view
+        // steady across URL-bar collapses, keyboards and rotation.
+        if (anchor) {
+            this.camera.offsetX = this.width / 2 - anchor.x * this.camera.scale;
+            this.camera.offsetY = this.height / 2 - anchor.y * this.camera.scale;
         }
+
         this.render();
     }
 
@@ -891,6 +948,68 @@ class NomaiCanvas {
         }
 
         ctx.restore();
+
+        // Screen-space, so it stays a constant size at any zoom
+        this.drawHoldRing();
+    }
+
+    /**
+     * Radial progress ring at the point being translated.
+     *
+     * Without it the only feedback is the progress bar in the translation
+     * panel, which on mobile is behind a collapsed sheet - so the app's
+     * primary gesture gives no sign that it is working.
+     */
+    drawHoldRing() {
+        const hold = this.holdIndicator;
+        if (!hold) return;
+
+        const progress = this.transitionProgress.get(hold.id) || 0;
+        if (progress <= 0 || progress >= 1) return;
+
+        const ctx = this.ctx;
+        const screen = this.worldToScreen(hold.x, hold.y);
+        const radius = 26;
+
+        ctx.save();
+        ctx.lineCap = 'round';
+
+        // Track
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, radius, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Progress arc, from 12 o'clock
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * 2 * Math.PI);
+        ctx.strokeStyle = this.colors.curve;
+        ctx.lineWidth = 3;
+        ctx.shadowColor = this.colors.curveGlow;
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    /**
+     * Show the hold ring at a world point for a given message.
+     */
+    setHoldIndicator(id, worldPoint) {
+        this.holdIndicator = worldPoint ? { id, x: worldPoint.x, y: worldPoint.y } : null;
+        this.render();
+    }
+
+    clearHoldIndicator() {
+        if (!this.holdIndicator) return;
+        this.holdIndicator = null;
+        this.render();
+    }
+
+    /** True while a translation is actively animating for this message. */
+    isTransitionRunning(id) {
+        return !!(this.activeTransition && this.activeTransition.id === id);
     }
 
     /**

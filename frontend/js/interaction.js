@@ -28,15 +28,29 @@ class InteractionHandler {
         this.onSpiralConfirm = callbacks.onSpiralConfirm || (() => {});
         this.onDrawingCancel = callbacks.onDrawingCancel || (() => {});
 
-        this.hitThreshold = 12; // screen pixels (divided by camera scale for world-space tests)
+        // Pointer-class tuning. A fingertip contact patch is ~40px across and
+        // drifts several px over a multi-second hold, so mouse-grade
+        // thresholds make both of the app's primary gestures fail on a phone.
+        const coarse = typeof window.matchMedia === 'function' &&
+            window.matchMedia('(pointer: coarse)').matches;
+        this.coarsePointer = coarse;
+
+        this.hitThreshold = coarse ? 22 : 12; // screen pixels (divided by camera scale for world-space tests)
+        this.panMoveThreshold = coarse ? 10 : 4; // screen px before a press counts as a pan
         this.isMouseDown = false;
         this.activeMessage = null;
 
         // Pan/zoom gesture state (screen coordinates)
         this.panSession = null; // { startX, startY, lastX, lastY, moved }
         this.holdStartScreen = null; // where a translate-hold began
-        this.holdCancelDistance = 8; // screen px of drag that cancels a hold
+        this.holdCancelDistance = coarse ? 18 : 8; // screen px of drag that cancels a hold
         this.pinchDist = null; // last two-finger distance for pinch zoom
+        this.pinchMid = null; // last two-finger midpoint, for pinch-panning
+
+        // Touch produces no hover, so the drawing flow switches from
+        // move-then-click to press-drag-release.
+        this.pressDrag = coarse;
+        this.lastCoords = null; // most recent world coords, for release-confirm
 
         // Drawing state machine
         this.drawingState = InteractionHandler.STATE_IDLE;
@@ -52,8 +66,8 @@ class InteractionHandler {
         // Double-click detection
         this.lastClickTime = 0;
         this.lastClickPos = null;
-        this.doubleClickThreshold = 300; // ms
-        this.doubleClickDistance = 10; // pixels
+        this.doubleClickThreshold = coarse ? 400 : 300; // ms
+        this.doubleClickDistance = coarse ? 28 : 10; // pixels
 
         this.bindEvents();
     }
@@ -76,11 +90,16 @@ class InteractionHandler {
             }
         });
 
-        // Touch support (single finger maps to mouse; two fingers pinch-zoom)
+        // A translate hold lasts seconds - long enough for the OS to claim the
+        // gesture as a long-press. touch-action and preventDefault cover most
+        // of it; this closes the desktop right-click and Android menu cases.
+        canvasEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // Touch support (single finger maps to mouse; two fingers pinch/pan)
         canvasEl.addEventListener('touchstart', (e) => {
             e.preventDefault();
-            if (e.touches.length === 2) {
-                // Entering pinch: release any hold/pan in progress
+            if (e.touches.length >= 2) {
+                // Entering a two-finger gesture: release any hold/pan first
                 if (this.activeMessage && this.isMouseDown) {
                     this.onMouseUp(this.activeMessage);
                 }
@@ -89,18 +108,48 @@ class InteractionHandler {
                 this.panSession = null;
                 this.isMouseDown = false;
                 this.pinchDist = this.touchDistance(e.touches);
+                this.pinchMid = this.touchMidpoint(e.touches);
                 return;
             }
             this.handleMouseDown(e.touches[0]);
         });
         canvasEl.addEventListener('touchend', (e) => {
             e.preventDefault();
-            if (e.touches.length < 2) this.pinchDist = null;
+            if (e.touches.length >= 2) {
+                // Still pinching with the remaining fingers - re-seed so the
+                // scale doesn't jump
+                this.pinchDist = this.touchDistance(e.touches);
+                this.pinchMid = this.touchMidpoint(e.touches);
+                return;
+            }
+
+            const wasPinching = this.pinchDist !== null;
+            this.pinchDist = null;
+            this.pinchMid = null;
+
+            if (wasPinching && e.touches.length === 1) {
+                // Dropping from pinch to one finger: hand the survivor over to
+                // panning, otherwise it is dead input until it is lifted.
+                const screen = this.getScreenCoords(e.touches[0]);
+                this.panSession = {
+                    startX: screen.x, startY: screen.y,
+                    lastX: screen.x, lastY: screen.y,
+                    moved: true
+                };
+                this.isMouseDown = true;
+                return;
+            }
+            if (wasPinching) return;
+
             this.handleMouseUp();
+            // Touch has no hover, so nothing else would ever clear it and the
+            // last tapped spiral would stay highlighted forever
+            this.canvas.setHovered(null);
         });
         canvasEl.addEventListener('touchcancel', (e) => {
             e.preventDefault();
             this.pinchDist = null;
+            this.pinchMid = null;
             if (this.drawingState !== InteractionHandler.STATE_IDLE) {
                 this.cancelDrawing();
             }
@@ -109,19 +158,26 @@ class InteractionHandler {
         });
         canvasEl.addEventListener('touchmove', (e) => {
             e.preventDefault();
-            if (e.touches.length === 2 && this.drawingState === InteractionHandler.STATE_IDLE) {
+            if (e.touches.length >= 2) {
+                // Pinch works in every state - you need to zoom in to place a
+                // spiral accurately, not just to browse
                 const dist = this.touchDistance(e.touches);
-                if (this.pinchDist) {
-                    const mid = this.touchMidpoint(e.touches);
+                const mid = this.touchMidpoint(e.touches);
+                if (this.pinchDist && this.pinchMid) {
                     this.canvas.zoomAt(mid.x, mid.y, dist / this.pinchDist);
+                    // Two-finger pan: the world tracks the fingers instead of
+                    // only scaling under them
+                    this.canvas.panBy(mid.x - this.pinchMid.x, mid.y - this.pinchMid.y);
                 }
                 this.pinchDist = dist;
+                this.pinchMid = mid;
                 return;
             }
+            if (this.pinchDist !== null) return; // mid-pinch bookkeeping
             this.handleMouseMove(e.touches[0]);
         });
 
-        // Mouse wheel for curvature control during spiral drawing
+        // Mouse wheel: zoom when idle, curvature while drawing
         canvasEl.addEventListener('wheel', (e) => this.handleWheel(e), { passive: false });
     }
 
@@ -282,8 +338,41 @@ class InteractionHandler {
         this.branchPoint = null;
         this.branchT = 0;
         this.gesturePath = [];
+        this.gestureAnchor = null;
         this.onDrawingCancel();
         this.canvas.canvas.style.cursor = 'default';
+    }
+
+    /**
+     * Set spiral curl from the drawing HUD. The mouse wheel is the only other
+     * way to reach this, so on touch it is the only way.
+     * @param {number} value - 0 (~72 degrees) to 1.0 (~720 degrees)
+     */
+    setCurvature(value) {
+        this.previewCurvature = Math.max(0, Math.min(1.0, value));
+        this.refreshPreview();
+    }
+
+    /**
+     * Flip the spiral's winding direction. Inferring it from the gesture's
+     * cross product is unreliable with a fingertip, so it is also explicit.
+     */
+    toggleCurvatureDir() {
+        this.previewCurvatureDir = -this.previewCurvatureDir;
+        this.refreshPreview();
+    }
+
+    /**
+     * Redraw the preview with the current params, without needing a new
+     * pointer position.
+     */
+    refreshPreview() {
+        if (this.drawingState !== InteractionHandler.STATE_DRAWING_SPIRAL) return;
+        if (!this.branchPoint || !this.lastCoords) return;
+        this.onSpiralPreview(this.branchPoint, this.lastCoords, this.gesturePath, {
+            curvature: this.previewCurvature,
+            curvatureDir: this.previewCurvatureDir
+        });
     }
 
     /**
@@ -293,6 +382,7 @@ class InteractionHandler {
         this.isMouseDown = true;
         const coords = this.getCanvasCoords(event);
         const screen = this.getScreenCoords(event);
+        this.lastCoords = coords;
 
         // State machine handling
         switch (this.drawingState) {
@@ -301,13 +391,23 @@ class InteractionHandler {
                 break;
 
             case InteractionHandler.STATE_SELECTING_BRANCH:
-                // Click confirms branch point
-                this.confirmBranchPoint(coords);
+                // Pointer: click confirms the hovered branch point.
+                // Touch: pressing begins the adjustment, release confirms -
+                // otherwise the very first touch would confirm whatever the
+                // double-tap happened to land on.
+                if (this.pressDrag) {
+                    this.handleBranchPointMove(coords);
+                } else {
+                    this.confirmBranchPoint(coords);
+                }
                 break;
 
             case InteractionHandler.STATE_DRAWING_SPIRAL:
-                // Click confirms spiral
-                this.confirmSpiral(coords);
+                if (this.pressDrag) {
+                    this.gestureAnchor = coords;
+                } else {
+                    this.confirmSpiral(coords);
+                }
                 break;
         }
     }
@@ -386,6 +486,7 @@ class InteractionHandler {
 
         // Reset to idle
         this.drawingState = InteractionHandler.STATE_IDLE;
+        this.gestureAnchor = null;
         this.canvas.canvas.style.cursor = 'default';
     }
 
@@ -393,6 +494,26 @@ class InteractionHandler {
      * Handle mouse up.
      */
     handleMouseUp(event) {
+        // Touch drawing: the release is what commits each step
+        if (this.pressDrag && this.drawingState !== InteractionHandler.STATE_IDLE) {
+            const coords = this.lastCoords;
+            this.isMouseDown = false;
+
+            if (this.drawingState === InteractionHandler.STATE_SELECTING_BRANCH) {
+                if (coords) this.confirmBranchPoint(coords);
+                return;
+            }
+
+            // Ignore a stray tap that never became a drag - confirming here
+            // would create a zero-length spiral
+            const anchor = this.gestureAnchor;
+            const dragged = coords && anchor &&
+                Math.hypot(coords.x - anchor.x, coords.y - anchor.y) > 20;
+            if (dragged) this.confirmSpiral(coords);
+            this.gestureAnchor = null;
+            return;
+        }
+
         if (this.panSession) {
             if (!this.panSession.moved) {
                 // Plain click on empty space: deselect
@@ -417,6 +538,7 @@ class InteractionHandler {
     handleMouseMove(event) {
         const coords = this.getCanvasCoords(event);
         const screen = this.getScreenCoords(event);
+        this.lastCoords = coords;
 
         switch (this.drawingState) {
             case InteractionHandler.STATE_SELECTING_BRANCH:
@@ -492,7 +614,7 @@ class InteractionHandler {
                     screen.x - this.panSession.startX,
                     screen.y - this.panSession.startY
                 );
-                if (total > 4) this.panSession.moved = true;
+                if (total > this.panMoveThreshold) this.panSession.moved = true;
             }
 
             this.canvas.panBy(dx, dy);
