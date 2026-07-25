@@ -598,20 +598,23 @@ class NomaiApp {
      */
     async loadThread(threadId) {
         try {
-            const thread = await api.getThread(threadId);
+            // Fetched together: progressive reveal needs the translated set
+            // before it can decide which children start visible, and this way
+            // it costs one round trip rather than two.
+            const [thread, progress] = await Promise.all([
+                api.getThread(threadId),
+                this.fetchTranslationProgress(threadId)
+            ]);
 
             // Reloading the same thread (e.g. after adding a message) keeps the camera still
             const sameThread = this.currentThreadId === threadId;
 
-            // The storage key includes created_at so state saved against an old
-            // database (same sequential ids, different thread) can never leak in
             this.currentThreadCreatedAt = thread.created_at;
 
             // Only clear translation state when switching to a different thread
             if (!sameThread) {
                 this.canvas.clearTranslated();
-                // Restore saved translation state from localStorage
-                this.loadTranslationState(thread);
+                this.restoreTranslationState(thread, progress);
             }
             this.currentThreadId = threadId;
             this.currentThreadOwnerId = thread.user_id;
@@ -634,8 +637,8 @@ class NomaiApp {
                 this.saveLayouts(threadId, layouts);
                 this.checkForCollisionConflicts();
             }, (messageId) => {
-                // Called when a message finishes translating - save state
-                this.saveTranslationState();
+                // Called when a message finishes translating
+                this.saveTranslation(messageId);
             }, sameThread);
 
             this.clearSelection();
@@ -1523,11 +1526,9 @@ class NomaiApp {
 
             // Mark the new message as already translated (you wrote it, so you know what it says)
             this.canvas.markTranslated(newMessage.id);
+            this.saveTranslation(newMessage.id);
 
             await this.loadThread(this.currentThreadId);
-
-            // Save translation state after reload
-            this.saveTranslationState();
 
             // Refresh the selector so the message count stays accurate
             await this.loadThreads();
@@ -1857,45 +1858,102 @@ class NomaiApp {
         return div.innerHTML;
     }
 
+    // =========================================================================
+    // Translation progress
+    //
+    // Stored per user in the database rather than localStorage, so reading
+    // progress follows the account instead of the browser profile.
+    // =========================================================================
+
     /**
-     * localStorage key for a thread's translation state. Includes created_at
-     * so ids from a wiped/recreated database can't match a new thread.
+     * Fetch this user's translated message ids for a thread.
+     * Never throws: losing progress should degrade to "nothing translated
+     * yet", not block the thread from opening.
+     * @returns {Promise<{ok: boolean, ids: number[]}>}
      */
-    translationStorageKey(threadId, createdAt) {
-        return `nomai_translated_${threadId}_${createdAt || ''}`;
+    async fetchTranslationProgress(threadId) {
+        try {
+            return { ok: true, ids: await api.getTranslations(threadId) };
+        } catch (err) {
+            console.error('Failed to load translation progress:', err);
+            return { ok: false, ids: [] };
+        }
     }
 
     /**
-     * Save translation state to localStorage.
+     * Record that a message is fully translated by this user.
+     *
+     * Fire-and-forget: this fires from the reveal animation's completion, and
+     * blocking or alerting there would be worse than a lost write. A single
+     * retry re-sends the whole known set, so one dropped request on a flaky
+     * connection doesn't quietly cost the user their progress.
      */
-    saveTranslationState() {
-        if (!this.currentThreadId) return;
-        const key = this.translationStorageKey(this.currentThreadId, this.currentThreadCreatedAt);
-        const ids = this.canvas.getTranslatedIds();
-        localStorage.setItem(key, JSON.stringify(ids));
+    saveTranslation(messageId) {
+        const threadId = this.currentThreadId;
+        if (!threadId || !messageId) return;
+
+        api.saveTranslations(threadId, [messageId]).catch(() => {
+            setTimeout(() => {
+                if (this.currentThreadId !== threadId) return;
+                api.saveTranslations(threadId, this.canvas.getTranslatedIds())
+                    .catch((err) => console.error('Failed to save translation progress:', err));
+            }, 3000);
+        });
     }
 
     /**
-     * Load translation state from localStorage.
+     * Apply saved progress to the canvas, folding in anything still sitting in
+     * localStorage from before this moved server-side.
      * @param {Object} thread - Thread from the API (with messages)
+     * @param {{ok: boolean, ids: number[]}} progress
      */
-    loadTranslationState(thread) {
-        // Drop the legacy key (no created_at): it may describe a different
-        // database's ids, which is exactly the stale state we're guarding against
-        localStorage.removeItem(`nomai_translated_${thread.id}`);
+    restoreTranslationState(thread, progress) {
+        // Only ids that belong to this thread - a stale local entry could
+        // otherwise name a message from a different (or deleted) thread
+        const valid = new Set((thread.messages || []).map(m => m.id));
+        const ids = new Set(progress.ids.filter(id => valid.has(id)));
 
-        const key = this.translationStorageKey(thread.id, thread.created_at);
-        const stored = localStorage.getItem(key);
-        if (stored) {
-            try {
-                const ids = JSON.parse(stored);
-                // Only restore ids that are actually part of this thread
-                const valid = new Set((thread.messages || []).map(m => m.id));
-                this.canvas.restoreTranslated(ids.filter(id => valid.has(id)));
-            } catch (e) {
-                console.error('Failed to parse translation state:', e);
+        // Don't consume the local copy if the server read failed - it is the
+        // only record of that progress until an upload succeeds
+        if (progress.ok) {
+            const migrated = this.takeLegacyTranslations(thread)
+                .filter(id => valid.has(id) && !ids.has(id));
+
+            if (migrated.length > 0) {
+                migrated.forEach(id => ids.add(id));
+                api.saveTranslations(thread.id, migrated)
+                    .catch((err) => console.error('Failed to migrate translation progress:', err));
             }
         }
+
+        this.canvas.restoreTranslated([...ids]);
+    }
+
+    /**
+     * Read and clear this browser's pre-server translation state for a thread.
+     * Keys were `nomai_translated_<threadId>_<createdAt>`, with an older
+     * variant that omitted created_at.
+     * @returns {number[]}
+     */
+    takeLegacyTranslations(thread) {
+        const keys = [
+            `nomai_translated_${thread.id}_${thread.created_at || ''}`,
+            `nomai_translated_${thread.id}`
+        ];
+
+        const ids = [];
+        for (const key of keys) {
+            const stored = localStorage.getItem(key);
+            localStorage.removeItem(key);
+            if (!stored) continue;
+            try {
+                const parsed = JSON.parse(stored);
+                if (Array.isArray(parsed)) ids.push(...parsed.filter(Number.isInteger));
+            } catch (e) {
+                // Unparseable leftover - dropping it is the right outcome
+            }
+        }
+        return ids;
     }
 }
 

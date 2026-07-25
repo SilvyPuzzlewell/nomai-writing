@@ -124,6 +124,47 @@ const api = {
     },
 
     /**
+     * Message ids in a thread the current user has already translated.
+     * Reading progress is stored per user on the server, so it survives a
+     * new browser or cleared site data.
+     * @param {number} threadId - Thread ID
+     * @returns {Promise<number[]>}
+     */
+    async getTranslations(threadId) {
+        const data = await apiCall(
+            `${API_BASE}/threads/${threadId}/translations`,
+            undefined,
+            'Failed to load translation progress'
+        );
+        return data.translated || [];
+    },
+
+    /**
+     * Mark messages as translated by the current user. Idempotent.
+     * @param {number} threadId - Thread ID
+     * @param {number[]} messageIds - Message IDs
+     */
+    async saveTranslations(threadId, messageIds) {
+        return apiCall(
+            `${API_BASE}/threads/${threadId}/translations`,
+            jsonBody('POST', { message_ids: messageIds }),
+            'Failed to save translation progress'
+        );
+    },
+
+    /**
+     * Forget the current user's translation progress for a thread.
+     * @param {number} threadId - Thread ID
+     */
+    async resetTranslations(threadId) {
+        return apiCall(
+            `${API_BASE}/threads/${threadId}/translations`,
+            { method: 'DELETE' },
+            'Failed to reset translation progress'
+        );
+    },
+
+    /**
      * Export a thread with all messages and layout data.
      * @param {number} threadId - Thread ID
      */

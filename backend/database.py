@@ -86,6 +86,22 @@ def init_db():
                 FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
                 UNIQUE(sender_id, receiver_id)
             );
+
+            -- Which messages each user has finished translating. Reading
+            -- progress is per-person, not per-thread: two collaborators on the
+            -- same thread uncover it independently. Previously this lived in
+            -- localStorage, so it was lost on a new browser or a data wipe.
+            CREATE TABLE IF NOT EXISTS message_translations (
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                translated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, message_id),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_message_translations_user
+                ON message_translations(user_id);
         ''')
         # Add layout_data column if it doesn't exist (migration for existing DBs)
         try:
@@ -372,6 +388,53 @@ def remove_collaborator(thread_id, user_id):
             'DELETE FROM thread_collaborators WHERE thread_id = ? AND user_id = ?',
             (thread_id, user_id)
         )
+
+# =========================================================================
+# Translation progress (per user)
+# =========================================================================
+
+def get_translated_message_ids(user_id, thread_id):
+    """Message ids in a thread that this user has finished translating."""
+    with get_connection() as conn:
+        cursor = conn.execute('''
+            SELECT mt.message_id
+            FROM message_translations mt
+            JOIN messages m ON m.id = mt.message_id
+            WHERE mt.user_id = ? AND m.thread_id = ?
+        ''', (user_id, thread_id))
+        # Index access works for both sqlite3.Row and libsql tuples
+        return [row[0] for row in cursor.fetchall()]
+
+def mark_messages_translated(user_id, thread_id, message_ids):
+    """Record messages as translated by a user. Idempotent.
+
+    The SELECT source doubles as validation: ids that aren't in this thread
+    insert nothing, so a caller can't mark messages it has no access to.
+    Returns the number of ids that referred to real messages in the thread.
+    """
+    if not message_ids:
+        return 0
+
+    matched = 0
+    with get_connection() as conn:
+        for message_id in message_ids:
+            cursor = conn.execute('''
+                INSERT OR IGNORE INTO message_translations (user_id, message_id)
+                SELECT ?, id FROM messages WHERE id = ? AND thread_id = ?
+            ''', (user_id, message_id, thread_id))
+            if cursor.rowcount and cursor.rowcount > 0:
+                matched += 1
+    return matched
+
+def clear_thread_translations(user_id, thread_id):
+    """Forget a user's translation progress for one thread."""
+    with get_connection() as conn:
+        conn.execute('''
+            DELETE FROM message_translations
+            WHERE user_id = ? AND message_id IN (
+                SELECT id FROM messages WHERE thread_id = ?
+            )
+        ''', (user_id, thread_id))
 
 # =========================================================================
 # Friendship functions

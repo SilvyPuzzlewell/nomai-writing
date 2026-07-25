@@ -344,6 +344,56 @@ def clear_layouts(thread_id):
     return jsonify({'success': True})
 
 # =========================================================================
+# Translation progress (per user)
+# =========================================================================
+
+@app.route('/api/threads/<int:thread_id>/translations', methods=['GET'])
+@login_required
+def get_translations(thread_id):
+    """Message ids in this thread the current user has already translated."""
+    allowed, _ = check_thread_access(thread_id)
+    if not allowed:
+        return jsonify({'error': 'Access denied'}), 403
+
+    ids = database.get_translated_message_ids(get_current_user(), thread_id)
+    return jsonify({'translated': ids})
+
+@app.route('/api/threads/<int:thread_id>/translations', methods=['POST'])
+@login_required
+def add_translations(thread_id):
+    """Mark messages as translated by the current user. Idempotent."""
+    allowed, _ = check_thread_access(thread_id)
+    if not allowed:
+        return jsonify({'error': 'Access denied'}), 403
+
+    data = request.get_json()
+    if not data or 'message_ids' not in data:
+        return jsonify({'error': 'message_ids array is required'}), 400
+
+    message_ids = data['message_ids']
+    if not isinstance(message_ids, list):
+        return jsonify({'error': 'message_ids must be an array'}), 400
+
+    try:
+        message_ids = [int(mid) for mid in message_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'message_ids must be integers'}), 400
+
+    saved = database.mark_messages_translated(get_current_user(), thread_id, message_ids)
+    return jsonify({'success': True, 'saved': saved})
+
+@app.route('/api/threads/<int:thread_id>/translations', methods=['DELETE'])
+@login_required
+def reset_translations(thread_id):
+    """Forget the current user's progress on a thread, so it reads fresh again."""
+    allowed, _ = check_thread_access(thread_id)
+    if not allowed:
+        return jsonify({'error': 'Access denied'}), 403
+
+    database.clear_thread_translations(get_current_user(), thread_id)
+    return jsonify({'success': True})
+
+# =========================================================================
 # Export / Import
 # =========================================================================
 
