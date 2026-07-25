@@ -692,8 +692,8 @@ class NomaiApp {
      * Handle branch point moving along spiral (during selection).
      */
     handleBranchPointMove(parentMessage, point, branchT) {
-        // Drawing takes over from reading: a latched translation would keep
-        // running, and its hold ring would sit in the middle of the gesture
+        // Drawing takes over from reading: a latched translation would
+        // otherwise keep revealing text in the panel mid-gesture
         this.stopTranslation();
         this.canvas.setBranchPointMarker(point, branchT);
         this.updateStatusIndicator(IS_COARSE
@@ -1120,8 +1120,8 @@ class NomaiApp {
      * Handle message selection.
      */
     handleMessageSelect(message) {
-        // Moving to a different glyph ends any latched translation, so its
-        // ring doesn't linger on a spiral you are no longer reading
+        // Moving to a different glyph ends any latched translation, so it
+        // doesn't keep running on a spiral you are no longer reading
         const previous = this.selectedMessage;
         if (previous && (!message || message.id !== previous.id)) {
             this.stopTranslation();
@@ -1202,12 +1202,6 @@ class NomaiApp {
         // Duration based on content length only (author shown immediately)
         const duration = this.translationDuration(message.content);
 
-        // Progress ring at the point being pressed. On mobile the panel's
-        // progress bar is behind a collapsed sheet, so without this the
-        // gesture gives no feedback at all.
-        const at = this.interaction && this.interaction.lastCoords;
-        if (at) this.canvas.setHoldIndicator(message.id, at);
-
         // Start spiral color transition
         const startProgress = this.canvas.startTransition(message.id, duration);
 
@@ -1230,12 +1224,11 @@ class NomaiApp {
     }
 
     /**
-     * Pause the spiral transition, the text reveal and the hold ring together.
+     * Pause the spiral transition and the text reveal together.
      */
     stopTranslation() {
         this.canvas.pauseTransition();
         this.pauseTextAnimation();
-        this.canvas.clearHoldIndicator();
     }
 
     /**
@@ -1294,7 +1287,6 @@ class NomaiApp {
                 this.textAnimationId = null;
                 this.animatingMessageId = null;
                 contentEl.classList.remove('translating');
-                this.canvas.clearHoldIndicator();
                 haptic([12, 40, 12]);
             }
         };

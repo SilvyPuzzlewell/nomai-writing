@@ -948,63 +948,6 @@ class NomaiCanvas {
         }
 
         ctx.restore();
-
-        // Screen-space, so it stays a constant size at any zoom
-        this.drawHoldRing();
-    }
-
-    /**
-     * Radial progress ring at the point being translated.
-     *
-     * Without it the only feedback is the progress bar in the translation
-     * panel, which on mobile is behind a collapsed sheet - so the app's
-     * primary gesture gives no sign that it is working.
-     */
-    drawHoldRing() {
-        const hold = this.holdIndicator;
-        if (!hold) return;
-
-        const progress = this.transitionProgress.get(hold.id) || 0;
-        if (progress <= 0 || progress >= 1) return;
-
-        const ctx = this.ctx;
-        const screen = this.worldToScreen(hold.x, hold.y);
-        const radius = 26;
-
-        ctx.save();
-        ctx.lineCap = 'round';
-
-        // Track
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y, radius, 0, 2 * Math.PI);
-        ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
-        ctx.lineWidth = 3;
-        ctx.stroke();
-
-        // Progress arc, from 12 o'clock
-        ctx.beginPath();
-        ctx.arc(screen.x, screen.y, radius, -Math.PI / 2, -Math.PI / 2 + progress * 2 * Math.PI);
-        ctx.strokeStyle = this.colors.curve;
-        ctx.lineWidth = 3;
-        ctx.shadowColor = this.colors.curveGlow;
-        ctx.shadowBlur = 10;
-        ctx.stroke();
-
-        ctx.restore();
-    }
-
-    /**
-     * Show the hold ring at a world point for a given message.
-     */
-    setHoldIndicator(id, worldPoint) {
-        this.holdIndicator = worldPoint ? { id, x: worldPoint.x, y: worldPoint.y } : null;
-        this.render();
-    }
-
-    clearHoldIndicator() {
-        if (!this.holdIndicator) return;
-        this.holdIndicator = null;
-        this.render();
     }
 
     /** True while a translation is actively animating for this message. */
