@@ -1,18 +1,76 @@
+/* =============================================================
+   Nomai Thread Viewer
+
+   The chrome is the same adobe clay as the canvas wall, seen in
+   shadow, so the app reads as one continuous surface rather than
+   a warm picture in a cold frame.
+
+   Color rules:
+     cyan   - Nomai glyph light. Untranslated writing, and by
+              extension every primary action ("write" glows like
+              the writing).
+     orange - a physical marker on the wall (branch points, the
+              drawing preview). Canvas-space only: on clay it has
+              almost no separation, so it is never chrome.
+     purple - translated writing.
+   ============================================================= */
+
+/* Heading webfont (bundled - no external requests) */
+@font-face {
+    font-family: 'Space Grotesk';
+    src: url('/fonts/space-grotesk.woff2') format('woff2');
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+}
+
 :root {
-    --bg-color: #1a1a2e;
-    --bg-secondary: #16213e;
-    --panel-bg: #0f1729;
+    /* Adobe-wall stone scale */
+    --bg-color: #14100e;
+    --bg-secondary: #1e1713;
+    /* Translucent only where a backdrop-filter backs it up; --panel-solid is
+       genuinely opaque, so menus never let the canvas read through them */
+    --panel-bg: rgba(28, 20, 16, 0.74);
+    --panel-solid: #1a1310;
+
+    /* Nomai cyan - the glyph/identity color */
     --curve-color: #00d9ff;
     --curve-glow: rgba(0, 217, 255, 0.4);
-    --selected-color: #888888;
-    --selected-glow: rgba(136, 136, 136, 0.4);
-    --text-color: #e0e0e0;
-    --text-muted: #888;
-    --border-color: #2a3f5f;
-    --btn-bg: #2a3f5f;
-    --btn-hover: #3a5070;
-    --danger-color: #e74c3c;
-    --danger-hover: #c0392b;
+    --on-curve: #06171c; /* text on a cyan fill */
+
+    /* Translated glyphs - Nomai purple */
+    --translated-color: #8d80b5;
+    --translated-glow: rgba(141, 128, 181, 0.4);
+
+    /* Warm accent (Outer Wilds orange) - canvas markers only */
+    --accent-color: #ff9a3c;
+    --accent-hover: #ffb066;
+
+    --text-color: #f2e9df;
+    --text-muted: #ab998b;
+    --border-color: #3a2c23;
+    --border-strong: #55402f;
+    --btn-bg: #2c211a;
+    --btn-hover: #362820;
+    --danger-color: #e2614c;
+    --danger-hover: #c8452f;
+
+    /* A lit top edge sells the panels as stone rather than divs */
+    --stone-lip: inset 0 1px 0 rgba(255, 225, 200, 0.07);
+
+    --font-heading: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    /* Segoe UI ships only on Windows; the old stack fell through to
+       Verdana on iOS, which pairs badly with Space Grotesk. */
+    --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+                 'Helvetica Neue', sans-serif;
+
+    --header-h: 56px;
+    --sheet-peek: 96px;
+
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
 * {
@@ -22,91 +80,207 @@
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: var(--font-body);
     background: var(--bg-color);
     color: var(--text-color);
-    min-height: 100vh;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
 }
 
-/* Header */
+/* =============================================================
+   Header
+   Always five slots: glyph, title, thread selector, primary
+   action, overflow. Everything else lives in the overflow menu,
+   at every width - which is what lets the controls stay at a
+   readable size instead of being clamped down to 10px.
+   ============================================================= */
 #header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 12px 20px;
+    gap: 8px;
+    min-height: var(--header-h);
+    padding: 8px 12px;
+    padding-left: max(12px, var(--safe-l));
+    padding-right: max(12px, var(--safe-r));
+    padding-top: max(8px, var(--safe-t));
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
-    height: 60px;
-}
-
-.header-left {
-    display: flex;
-    gap: 10px;
-    align-items: center;
+    box-shadow: var(--stone-lip);
+    position: relative;
+    z-index: 60;
 }
 
 .header-title {
-    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-heading);
+    font-size: 1.05rem;
     color: var(--curve-color);
     text-transform: uppercase;
-    letter-spacing: 2px;
-    font-weight: 300;
+    letter-spacing: 2.5px;
+    font-weight: 400;
+    text-shadow: 0 0 12px var(--curve-glow);
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-/* Buttons */
+.title-glyph {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 5px var(--curve-glow));
+}
+
+.header-group {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+    flex: 1;
+    margin-left: 4px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border-color);
+}
+
+#thread-selector {
+    flex: 0 1 320px;
+    min-width: 0;
+}
+
+/* Pushes the overflow button to the far edge */
+.header-spacer {
+    flex: 1;
+    min-width: 0;
+}
+
+/* =============================================================
+   Buttons
+   ============================================================= */
 .btn {
-    padding: 8px 16px;
-    border: none;
-    border-radius: 4px;
-    background: var(--btn-bg);
-    color: var(--text-color);
+    padding: 8px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 14px;
-    transition: background 0.2s;
+    font-family: var(--font-heading);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
-.btn:hover {
-    background: var(--btn-hover);
+.btn:active {
+    transform: translateY(1px);
+    background: var(--btn-bg);
+    color: var(--text-color);
 }
 
+/* Primary = the glyph light. A lit surface rather than a flat neon slab -
+   full-strength --curve-color over a large fill is glaring. */
 .btn-primary {
-    background: var(--curve-color);
-    color: #000;
+    background: linear-gradient(180deg, #1ac9e8 0%, #0aa3c2 100%);
+    border-color: #1ac9e8;
+    color: var(--on-curve);
+    font-weight: 600;
+    box-shadow: 0 0 14px rgba(0, 217, 255, 0.2);
 }
 
-.btn-primary:hover {
-    background: #00b8d9;
+.btn-primary:active {
+    background: #0aa3c2;
+    color: var(--on-curve);
 }
 
 .btn-danger {
-    background: var(--danger-color);
+    border-color: rgba(226, 97, 76, 0.45);
+    color: var(--danger-color);
 }
 
-.btn-danger:hover {
+.btn-danger:active {
     background: var(--danger-hover);
+    border-color: var(--danger-hover);
+    color: #fff;
 }
 
 .btn-small {
-    padding: 4px 8px;
+    padding: 4px 10px;
     font-size: 12px;
-    background: var(--btn-bg);
-    color: var(--text-color);
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
 }
 
-/* Select */
+/* Square icon buttons in the header (new thread, overflow) */
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    flex-shrink: 0;
+    min-width: 38px;
+    min-height: 38px;
+    padding: 8px 12px;
+}
+
+.btn-icon svg {
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+}
+
+/* Unread marker on the overflow button, so collapsing Friends into
+   the menu doesn't hide its badge */
+#header-menu-btn {
+    position: relative;
+}
+
+#header-menu-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--curve-color);
+    box-shadow: 0 0 7px var(--curve-glow);
+}
+
+@media (hover: hover) {
+    .btn:hover {
+        color: var(--text-color);
+        border-color: var(--curve-color);
+        background: var(--btn-bg);
+    }
+
+    .btn-primary:hover {
+        background: linear-gradient(180deg, #4ce6ff 0%, #14b8d8 100%);
+        border-color: #4ce6ff;
+        color: var(--on-curve);
+    }
+
+    .btn-danger:hover {
+        background: var(--danger-color);
+        border-color: var(--danger-color);
+        color: #fff;
+    }
+}
+
+/* =============================================================
+   Select
+   ============================================================= */
 select {
     padding: 8px 12px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--bg-color);
     color: var(--text-color);
     font-size: 14px;
-    min-width: 200px;
+    font-family: inherit;
+    max-width: 100%;
     cursor: pointer;
+    transition: border-color 0.15s;
 }
 
 select:focus {
@@ -114,76 +288,309 @@ select:focus {
     border-color: var(--curve-color);
 }
 
-/* Main layout */
-#main {
-    display: flex;
-    height: calc(100vh - 60px);
+@media (hover: hover) {
+    select:hover {
+        border-color: var(--border-strong);
+    }
 }
 
-/* Canvas container */
+/* =============================================================
+   Overflow menu
+   Dropdown anchored under the header on wide screens, bottom
+   sheet on phones.
+   ============================================================= */
+#header-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 3, 2, 0.5);
+    z-index: 900;
+}
+
+#header-menu {
+    position: fixed;
+    top: calc(var(--header-h) + var(--safe-t) + 6px);
+    right: max(12px, var(--safe-r));
+    width: 244px;
+    max-height: calc(100dvh - var(--header-h) - var(--safe-t) - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(180deg, #241811 0%, var(--panel-solid) 60%);
+    box-shadow: var(--stone-lip), 0 18px 50px rgba(0, 0, 0, 0.6);
+    z-index: 950;
+    animation: menu-in 140ms ease-out;
+}
+
+@keyframes menu-in {
+    from { opacity: 0; transform: translateY(-6px); }
+}
+
+/* Menu rows: the same <button class="btn"> elements, restyled */
+#header-menu .btn {
+    width: 100%;
+    text-align: left;
+    border-color: transparent;
+    background: transparent;
+    padding: 11px 12px;
+    font-size: 14px;
+    border-radius: 6px;
+}
+
+#header-menu .btn:active {
+    background: var(--btn-hover);
+    transform: none;
+}
+
+@media (hover: hover) {
+    #header-menu .btn:hover {
+        background: var(--btn-hover);
+        border-color: transparent;
+        color: var(--text-color);
+    }
+
+    #header-menu .btn-danger:hover {
+        background: var(--danger-hover);
+        color: #fff;
+    }
+}
+
+.menu-user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-heading);
+    font-size: 13px;
+    color: var(--curve-color);
+    letter-spacing: 0.5px;
+}
+
+.menu-user .username-display {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Only draw the divider when the danger group actually has a
+   visible item - these buttons are .hidden until a thread is open */
+.menu-group-danger:has(> .btn:not(.hidden)) {
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* =============================================================
+   Main layout
+   ============================================================= */
+#main {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    /* The same clay the canvas paints. The sidebar is translucent, so this is
+       what actually shows through it - without it the "glass" is just black. */
+    background: radial-gradient(circle at 30% 40%, #6b3a24 0%, #3b2016 55%, #1b0f0b 100%);
+}
+
 #canvas-container {
     flex: 1;
+    /* Allow shrinking: the canvas's inline pixel size must not lock the
+       flex item's minimum, or the panel gets pushed off-viewport */
+    min-width: 0;
+    min-height: 0;
     position: relative;
-    background: var(--bg-color);
-    background-image:
-        radial-gradient(circle at center, rgba(0, 217, 255, 0.03) 0%, transparent 70%);
+    /* Adobe-wall tone matching the canvas's procedural texture (shown
+       briefly before the canvas paints) */
+    background: radial-gradient(circle at 45% 42%, #93502e 0%, #5e3220 45%, #241410 100%);
 }
 
 #spiral-canvas {
     width: 100%;
     height: 100%;
     display: block;
+    touch-action: none;
+    /* A translate hold lasts seconds - long enough for iOS to fire its
+       callout/magnifier and abort the gesture via touchcancel */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
-/* Floating action button */
-#fab-add {
+/* Canvas view controls (zoom / fit) */
+#canvas-controls {
     position: absolute;
-    bottom: 30px;
-    right: 30px;
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    border: none;
-    background: var(--curve-color);
-    color: #000;
-    font-size: 28px;
+    right: max(16px, var(--safe-r));
+    bottom: max(16px, var(--safe-b));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 50;
+}
+
+.canvas-control-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: rgba(22, 16, 13, 0.78);
+    color: var(--text-muted);
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 217, 255, 0.3);
-    transition: transform 0.2s, box-shadow 0.2s;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: color 0.15s, border-color 0.15s;
 }
 
-#fab-add:hover {
-    transform: scale(1.1);
-    box-shadow: 0 6px 16px rgba(0, 217, 255, 0.5);
+.canvas-control-btn svg {
+    width: 18px;
+    height: 18px;
 }
 
-/* Translation panel */
+.canvas-control-btn:active {
+    color: var(--curve-color);
+    border-color: var(--curve-color);
+}
+
+@media (hover: hover) {
+    .canvas-control-btn:hover {
+        color: var(--curve-color);
+        border-color: var(--curve-color);
+    }
+}
+
+/* =============================================================
+   Translation panel
+   Desktop: a 320px sidebar. Mobile: a draggable bottom sheet
+   (see the responsive block at the end).
+   ============================================================= */
 #translation-panel {
     width: 320px;
-    background: var(--panel-bg);
+    flex-shrink: 0;
+    /* Warm at the top where the wall light falls, settling into shadow -
+       flat translucent black over the clay just reads muddy */
+    background: linear-gradient(180deg,
+        rgba(52, 34, 25, 0.74) 0%,
+        rgba(28, 19, 15, 0.84) 55%,
+        rgba(22, 15, 12, 0.88) 100%);
     border-left: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
+}
+
+/* Very low-opacity grain, so the panel reads as light projected on
+   stone rather than a flat div */
+#translation-panel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    background-image: radial-gradient(rgba(255, 220, 190, 0.05) 1px, transparent 1px);
+    background-size: 3px 3px;
+}
+
+@media (min-width: 901px) and (prefers-reduced-transparency: no-preference) {
+    #translation-panel {
+        backdrop-filter: blur(20px) saturate(1.15);
+        -webkit-backdrop-filter: blur(20px) saturate(1.15);
+    }
+}
+
+/* Drag handle - only meaningful in sheet mode */
+#sheet-handle {
+    display: none;
 }
 
 #panel-header {
-    padding: 20px;
+    padding: 18px 20px 14px;
     border-bottom: 1px solid var(--border-color);
+    position: relative;
+    flex-shrink: 0;
 }
 
-#panel-header h2 {
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
+.panel-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
     margin-bottom: 8px;
 }
 
-#writer-name {
-    font-size: 1.2rem;
-    color: var(--selected-color);
+#panel-header h2 {
+    font-family: var(--font-heading);
+    font-size: 12px;
     font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-muted);
+}
+
+#writer-name {
+    font-family: var(--font-heading);
+    font-size: 1.15rem;
+    color: var(--text-color);
+    font-weight: 500;
+    display: block;
+    min-height: 1.3em;
+    overflow-wrap: anywhere;
+}
+
+#writer-name:not(:empty)::before {
+    content: '';
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--curve-color);
+    box-shadow: 0 0 6px var(--curve-glow);
+    margin-right: 8px;
+    vertical-align: 1px;
+}
+
+/* Fully translated: the marker dot shifts to the translated purple */
+#writer-name.translated::before {
+    background: var(--translated-color);
+    box-shadow: 0 0 6px var(--translated-glow);
+}
+
+/* Thin translation progress bar under the panel header */
+#translation-progress {
+    margin-top: 10px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--border-color);
+    overflow: hidden;
+}
+
+#translation-progress-bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--curve-color), var(--translated-color));
+    box-shadow: 0 0 6px var(--curve-glow);
+}
+
+/* One-line preview shown only while the sheet is collapsed to peek */
+#peek-preview {
+    display: none;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 #message-content {
@@ -191,16 +598,19 @@ select:focus {
     padding: 20px;
     overflow-y: auto;
     overflow-x: hidden;
-    line-height: 1.6;
+    overscroll-behavior: contain;
     word-wrap: break-word;
     overflow-wrap: break-word;
 }
 
 #message-content p {
+    font-size: 16px;
+    line-height: 1.75;
+    text-wrap: pretty;
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    word-break: break-all;
+    word-break: normal;
 }
 
 #message-content .placeholder {
@@ -208,18 +618,84 @@ select:focus {
     font-style: italic;
 }
 
-/* Modals */
+/* Blinking translation caret while text is revealing */
+#message-content.translating p:last-of-type::after {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    margin-left: 3px;
+    vertical-align: -0.15em;
+    background: var(--curve-color);
+    box-shadow: 0 0 6px var(--curve-glow);
+    animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+    50% { opacity: 0; }
+}
+
+/* Panel empty state */
+.panel-empty {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 10px;
+    padding: 20px;
+}
+
+.panel-empty svg {
+    width: 46px;
+    height: 46px;
+    color: var(--curve-color);
+    opacity: 0.5;
+    filter: drop-shadow(0 0 8px var(--curve-glow));
+    margin-bottom: 4px;
+}
+
+.panel-empty p {
+    font-family: var(--font-heading);
+    color: var(--text-color);
+    opacity: 0.85;
+    letter-spacing: 0.4px;
+    line-height: 1.5;
+}
+
+.panel-empty p.hint {
+    font-family: var(--font-body);
+    color: var(--text-muted);
+    opacity: 1;
+    letter-spacing: normal;
+    line-height: 1.7;
+}
+
+/* =============================================================
+   Modals
+   ============================================================= */
 .modal {
     position: fixed;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.7);
+    background: rgba(6, 4, 3, 0.62);
     display: flex;
     justify-content: center;
     align-items: center;
+    padding: 16px;
+    padding-bottom: max(16px, var(--safe-b));
+    overflow-y: auto;
     z-index: 1000;
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+    .modal {
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+    }
 }
 
 .modal.hidden {
@@ -227,20 +703,55 @@ select:focus {
 }
 
 .modal-content {
-    background: var(--bg-secondary);
-    padding: 24px;
-    border-radius: 8px;
-    width: 90%;
+    background: var(--panel-solid);
+    padding: 26px;
+    border-radius: 12px;
+    width: 100%;
     max-width: 450px;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     border: 1px solid var(--border-color);
+    box-shadow:
+        var(--stone-lip),
+        0 0 40px rgba(0, 217, 255, 0.05),
+        0 20px 60px rgba(0, 0, 0, 0.55);
+    animation: modal-in 180ms ease-out;
+}
+
+@media (prefers-reduced-transparency: no-preference) {
+    .modal-content {
+        background: var(--panel-bg);
+        backdrop-filter: blur(24px) saturate(1.15);
+        -webkit-backdrop-filter: blur(24px) saturate(1.15);
+    }
+}
+
+@keyframes modal-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
 }
 
 .modal-content h3 {
     margin-bottom: 20px;
     color: var(--curve-color);
+    font-family: var(--font-heading);
+    font-weight: 500;
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
 }
 
-/* Forms */
+/* =============================================================
+   Forms
+   ============================================================= */
 .form-group {
     margin-bottom: 16px;
 }
@@ -257,11 +768,14 @@ select:focus {
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--border-color);
-    border-radius: 4px;
+    border-radius: 6px;
     background: var(--bg-color);
     color: var(--text-color);
-    font-size: 14px;
+    /* 16px minimum: iOS Safari auto-zooms the viewport on focus for
+       anything smaller, and the zoom does not come back */
+    font-size: 16px;
     font-family: inherit;
+    transition: border-color 0.15s;
 }
 
 .form-group input:focus,
@@ -273,26 +787,17 @@ select:focus {
 .form-group textarea {
     resize: vertical;
     min-height: 100px;
+    line-height: 1.6;
+}
+
+/* Hints (used inside and outside form groups) */
+.hint {
+    font-size: 13px;
+    color: var(--text-muted);
 }
 
 .form-group .hint {
-    font-size: 12px;
-    color: var(--text-muted);
     margin-top: 6px;
-}
-
-.parent-info {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    background: var(--bg-color);
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-}
-
-.parent-info span {
-    color: var(--selected-color);
 }
 
 .form-actions {
@@ -300,13 +805,30 @@ select:focus {
     justify-content: flex-end;
     gap: 10px;
     margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+/* Inline error banner (login page and forms) */
+.inline-error {
+    background: rgba(226, 97, 76, 0.12);
+    border: 1px solid var(--danger-color);
+    color: var(--danger-color);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: none;
+}
+
+.inline-error.visible {
+    display: block;
 }
 
 /* Checkbox label */
 .checkbox-label {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 14px;
     color: var(--text-muted);
     cursor: pointer;
@@ -315,23 +837,118 @@ select:focus {
     transition: color 0.2s;
 }
 
-.checkbox-label:hover {
-    color: var(--text-color);
-}
-
 .checkbox-label input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
     accent-color: var(--curve-color);
     cursor: pointer;
 }
 
-/* Utility */
+@media (hover: hover) {
+    .checkbox-label:hover {
+        color: var(--text-color);
+    }
+}
+
+/* =============================================================
+   Utility
+   ============================================================= */
 .hidden {
     display: none !important;
 }
 
-/* Scrollbar styling */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+/* Keyboard focus */
+.btn:focus-visible,
+.tab:focus-visible,
+.friends-tab:focus-visible,
+.canvas-control-btn:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid var(--curve-color);
+    outline-offset: 2px;
+}
+
+/* =============================================================
+   Toasts
+   ============================================================= */
+#toast-container {
+    position: fixed;
+    bottom: calc(24px + var(--safe-b));
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    z-index: 1200;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    max-width: min(440px, calc(100vw - 40px));
+    padding: 10px 18px;
+    border-radius: 6px;
+    background: rgba(16, 11, 9, 0.95);
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    animation: toast-in 200ms ease-out;
+}
+
+.toast-info {
+    border-color: var(--curve-color);
+    box-shadow: 0 0 14px rgba(0, 217, 255, 0.12), 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.toast-success {
+    border-color: var(--accent-color);
+    box-shadow: 0 0 14px rgba(255, 154, 60, 0.15), 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.toast-error {
+    border-color: var(--danger-color);
+    box-shadow: 0 0 14px rgba(226, 97, 76, 0.18), 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+.toast-out {
+    animation: toast-out 250ms ease-in forwards;
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+}
+
+@keyframes toast-out {
+    to {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+/* =============================================================
+   Scrollbars
+   ============================================================= */
 ::-webkit-scrollbar {
     width: 8px;
 }
@@ -346,5 +963,559 @@ select:focus {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--btn-bg);
+    background: var(--border-strong);
 }
+
+@supports (scrollbar-width: thin) {
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border-color) transparent;
+    }
+}
+
+/* =============================================================
+   Collision modal
+   ============================================================= */
+.collision-modal-content {
+    max-width: 400px;
+}
+
+/* Confirmations can open on top of another modal (e.g. removing a friend
+   from inside the friends dialog) */
+#confirm-modal {
+    z-index: 1100;
+}
+
+.collision-modal-content p,
+.confirm-modal-content p {
+    color: var(--text-muted);
+    margin-bottom: 20px;
+    line-height: 1.6;
+}
+
+/* =============================================================
+   Drawing HUD
+   Instruction pill at the top (read once, out of thumb range) and
+   the live controls docked at the bottom where they can be
+   reached. The old single bottom-centered pill collided with both
+   the toasts and the zoom buttons.
+   ============================================================= */
+.drawing-status {
+    position: absolute;
+    top: calc(14px + var(--safe-t));
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(92vw, 460px);
+    text-align: center;
+    background: rgba(10, 7, 5, 0.88);
+    color: var(--accent-color);
+    padding: 9px 18px;
+    border-radius: 18px;
+    font-size: 13px;
+    line-height: 1.45;
+    font-family: var(--font-heading);
+    border: 1px solid var(--accent-color);
+    box-shadow: 0 0 16px rgba(255, 154, 60, 0.25);
+    pointer-events: none;
+    z-index: 100;
+}
+
+#drawing-controls {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(18px + var(--safe-b));
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 14px;
+    background: rgba(10, 7, 5, 0.9);
+    border: 1px solid var(--accent-color);
+    box-shadow: 0 0 16px rgba(255, 154, 60, 0.2);
+    z-index: 110;
+    max-width: min(94vw, 460px);
+}
+
+#drawing-controls .curl-label {
+    font-family: var(--font-heading);
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+#curl-slider {
+    flex: 1 1 120px;
+    min-width: 90px;
+    height: 28px;
+    accent-color: var(--accent-color);
+    cursor: pointer;
+}
+
+#drawing-controls .btn {
+    padding: 7px 11px;
+    font-size: 13px;
+    min-height: 38px;
+}
+
+#curl-dir-btn {
+    min-width: 42px;
+}
+
+/* =============================================================
+   Friends / collaborators
+   ============================================================= */
+.friends-modal-content {
+    max-width: 500px;
+}
+
+.friends-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 8px;
+    overflow-x: auto;
+}
+
+.friends-tab {
+    padding: 9px 14px;
+    border: none;
+    border-radius: 4px 4px 0 0;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    font-family: var(--font-heading);
+    white-space: nowrap;
+    transition: color 0.2s, background 0.2s;
+    position: relative;
+}
+
+.friends-tab.active {
+    color: var(--curve-color);
+    background: rgba(0, 217, 255, 0.1);
+}
+
+@media (hover: hover) {
+    .friends-tab:hover {
+        color: var(--text-color);
+    }
+}
+
+.friends-tab-content {
+    display: none;
+}
+
+.friends-tab-content.active {
+    display: block;
+}
+
+.friends-tab-content h4 {
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 12px 0 8px;
+}
+
+.friends-list {
+    max-height: 250px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.friend-row,
+.request-row,
+.search-result-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    transition: border-color 0.15s;
+}
+
+@media (hover: hover) {
+    .friend-row:hover,
+    .request-row:hover,
+    .search-result-row:hover {
+        border-color: var(--curve-color);
+    }
+}
+
+.friend-username {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-color);
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.request-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+/* Badge (notification count) */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--curve-color);
+    color: var(--on-curve);
+    font-size: 11px;
+    font-weight: bold;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* Friends checklist in thread creation modal */
+.friends-checklist {
+    max-height: 150px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 8px;
+    background: var(--bg-color);
+}
+
+.friend-checkbox {
+    display: flex;
+    padding: 6px 8px;
+    margin: 0;
+}
+
+/* =============================================================
+   Responsive
+   Single breakpoint at 900/901px. Below it the panel becomes a
+   draggable bottom sheet overlaying a full-height canvas, and the
+   overflow menu docks to the bottom of the screen.
+   ============================================================= */
+@media (max-width: 900px) {
+    .header-title {
+        letter-spacing: 2px;
+        font-size: 1rem;
+    }
+
+    .header-group {
+        margin-left: 0;
+        padding-left: 8px;
+    }
+
+    /* Overflow menu becomes a bottom sheet */
+    #header-menu {
+        top: auto;
+        right: 0;
+        left: 0;
+        bottom: 0;
+        width: auto;
+        max-height: min(80dvh, 560px);
+        padding: 10px 10px calc(10px + var(--safe-b));
+        padding-left: max(10px, var(--safe-l));
+        padding-right: max(10px, var(--safe-r));
+        border-radius: 16px 16px 0 0;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        animation: sheet-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
+    }
+
+    #header-menu .btn {
+        padding: 13px 14px;
+        font-size: 15px;
+    }
+
+    @keyframes sheet-in {
+        from { transform: translateY(100%); }
+    }
+
+    /* --- Translation panel as a bottom sheet --- */
+    #translation-panel {
+        position: absolute;
+        inset: auto 0 0 0;
+        width: auto;
+        height: calc(100% - 8px);
+        border-left: none;
+        border-top: 1px solid var(--border-strong);
+        border-radius: 16px 16px 0 0;
+        /* Opaque here: it slides over a live canvas, so any translucency
+           both costs a blur and lets the wall fight the text */
+        background: linear-gradient(180deg, #2b1d16 0%, #1d1410 40%, #170f0c 100%);
+        box-shadow: var(--stone-lip), 0 -12px 40px rgba(0, 0, 0, 0.5);
+        z-index: 70;
+        /* Set by BottomSheet; falls back to peek before JS runs */
+        transform: translateY(calc(100% - var(--sheet-peek)));
+    }
+
+    /* Only the grab areas swallow vertical gestures - #message-content
+       must keep its native scrolling */
+    #sheet-handle,
+    #panel-header {
+        touch-action: none;
+    }
+
+    #message-content {
+        touch-action: pan-y;
+    }
+
+    #translation-panel.sheet-animating {
+        transition: transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
+    }
+
+    #sheet-handle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 22px;
+        flex-shrink: 0;
+        cursor: grab;
+    }
+
+    #sheet-handle::before {
+        content: '';
+        width: 40px;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--border-strong);
+    }
+
+    #panel-header {
+        padding: 2px 18px 14px;
+    }
+
+    /* At peek only the header is on screen, so show a preview line
+       there instead of leaving dead space */
+    #translation-panel.sheet-peek #peek-preview:not(:empty) {
+        display: block;
+    }
+
+    #translation-panel.sheet-peek #message-content {
+        overflow: hidden;
+    }
+
+    /* Keep the zoom controls clear of the collapsed sheet, and get them out
+       of the way entirely once it is raised - they would otherwise ghost
+       through the sheet */
+    #canvas-controls {
+        bottom: calc(var(--sheet-peek) + 12px);
+        transition: opacity 180ms ease;
+    }
+
+    #main:has(#translation-panel.sheet-half) #canvas-controls,
+    #main:has(#translation-panel.sheet-full) #canvas-controls {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    /* The sheet is full-height and slid down, so content laid out for the
+       full height sits below the fold at the smaller snaps. Text starts at
+       the top anyway; the centred empty state has to be pulled up. */
+    .panel-empty {
+        height: auto;
+        justify-content: flex-start;
+        padding-top: 28px;
+    }
+
+    #toast-container {
+        bottom: calc(var(--sheet-peek) + 16px);
+    }
+
+    /* Sit above the collapsed sheet, not on top of it */
+    #drawing-controls {
+        bottom: calc(var(--sheet-peek) + 14px);
+    }
+
+    /* The controls bar wants that whole strip; pinch still zooms */
+    body.is-drawing #canvas-controls {
+        display: none;
+    }
+}
+
+@media (max-width: 600px) {
+    /* The title text is the first thing worth losing - the glyph
+       still identifies the app */
+    .header-title {
+        font-size: 0;
+        gap: 0;
+    }
+
+    #header {
+        gap: 6px;
+    }
+
+    .header-group {
+        gap: 6px;
+        padding-left: 8px;
+    }
+
+    /* Primary action collapses to its icon */
+    #new-thread-btn .btn-label {
+        display: none;
+    }
+
+    #new-thread-btn {
+        padding: 8px 11px;
+    }
+}
+
+/* Comfortable targets wherever there is no precise pointer */
+@media (pointer: coarse) {
+    .btn {
+        min-height: 40px;
+    }
+
+    .btn-small {
+        min-height: 36px;
+        padding: 6px 12px;
+        font-size: 13px;
+    }
+
+    select,
+    .form-group input,
+    .form-group textarea {
+        font-size: 16px;
+        min-height: 42px;
+    }
+
+    .friends-tab {
+        min-height: 40px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .modal-content,
+    #header-menu,
+    .toast {
+        animation: none;
+    }
+
+    #translation-panel.sheet-animating {
+        transition: none;
+    }
+
+    #message-content.translating p:last-of-type::after {
+        animation: none;
+    }
+
+    .btn:active {
+        transform: none;
+    }
+}
+
+
+/* Reading controls and the revealed conversation share the wall's palette. */
+#reading-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+#conversation-outline {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-color);
+    min-height: 0;
+}
+#outline-summary {
+    cursor: pointer;
+    padding: 12px 20px;
+    font-family: var(--font-heading);
+    font-size: 14px;
+}
+#thread-unread-count {
+    color: var(--curve-color);
+    font-size: 12px;
+    margin-left: 6px;
+}
+#outline-list {
+    max-height: min(30vh, 250px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0 12px 12px;
+    touch-action: pan-y;
+}
+#outline-list ol { list-style: none; }
+#outline-list ol ol {
+    margin-left: 10px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border-strong);
+}
+.outline-message {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px;
+    margin-top: 3px;
+    text-align: left;
+    font: inherit;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+.outline-message.on-path { color: var(--text-color); }
+.outline-message[aria-current="true"] {
+    border-color: var(--curve-color);
+    background: rgba(0, 217, 255, 0.06);
+}
+.outline-message:focus-visible, #outline-summary:focus-visible {
+    outline: 2px solid var(--curve-color);
+    outline-offset: -2px;
+}
+.outline-writer { font-family: var(--font-heading); font-size: 14px; }
+.outline-writer::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--curve-color);
+}
+.is-translated .outline-writer::before { background: var(--translated-color); }
+.outline-preview {
+    display: block;
+    font-size: 12px;
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#thread-updates {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 20px;
+    flex-shrink: 0;
+}
+#thread-updates:empty { display: none; }
+#message-content { min-height: 0; }
+#canvas-container[aria-busy="true"] { pointer-events: none; opacity: 0.65; }
+@media (max-width: 900px) {
+    #reading-actions .btn, #write-message-btn { min-height: 40px; }
+    #translation-panel.sheet-peek #conversation-outline,
+    #translation-panel.sheet-peek #reading-actions,
+    #translation-panel.sheet-peek #thread-updates { display: none; }
+    #outline-list { max-height: 20dvh; }
+}
+
+#sheet-handle {
+    width: 100%;
+    border: 0;
+    background: transparent;
+}
+#sheet-handle:focus-visible::before { background: var(--curve-color); }

@@ -1,3 +1,26 @@
+// Debug instrumentation is opt-in via ?debug=1 (pixel-coincidence scan + canvas overlap markers)
+window.NOMAI_DEBUG = new URLSearchParams(window.location.search).has('debug');
+
+/** Old or damaged layouts should regenerate instead of preventing a thread opening. */
+function parseLayoutData(value) {
+    if (!value) return null;
+    try {
+        const layout = typeof value === 'string' ? JSON.parse(value) : value;
+        if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return null;
+        for (const key of ['seed', 'offsetX', 'offsetY', 'startAngle']) {
+            if (key in layout && !Number.isFinite(layout[key])) return null;
+        }
+        for (const key of ['userPrefs', 'overrides']) {
+            if (key in layout && (!layout[key] || typeof layout[key] !== 'object' || Array.isArray(layout[key]))) return null;
+        }
+        const branchT = layout.userPrefs?.branchT;
+        if (branchT !== undefined && (!Number.isFinite(branchT) || branchT < 0 || branchT > 1)) return null;
+        return layout;
+    } catch (err) {
+        return null;
+    }
+}
+
 /**
  * Sample a point along a cubic Bezier curve at parameter t.
  */
@@ -79,8 +102,11 @@ function bezierBoundingBox(p0, cp1, cp2, p1) {
  * Check if two axis-aligned bounding boxes overlap.
  */
 function boxesOverlap(box1, box2) {
-    return !(box1.maxX < box2.minX || box2.maxX < box1.minX ||
-             box1.maxY < box2.minY || box2.maxY < box1.minY);
+    // Include a small stroke clearance: disjoint centerlines can still
+    // paint the same pixels when each glyph has a visible line width.
+    const gap = 2;
+    return !(box1.maxX + gap < box2.minX || box2.maxX + gap < box1.minX ||
+             box1.maxY + gap < box2.minY || box2.maxY + gap < box1.minY);
 }
 
 /**
@@ -114,8 +140,8 @@ function splitBezier(p0, cp1, cp2, p1) {
  */
 function bezierCurvesIntersect(curve1, curve2, depth = 0, maxDepth = 16, tolerance = 4.0) {
     // Get bounding boxes
-    const box1 = bezierBoundingBox(curve1.p0, curve1.cp1, curve1.cp2, curve1.p1);
-    const box2 = bezierBoundingBox(curve2.p0, curve2.cp1, curve2.cp2, curve2.p1);
+    const box1 = curve1.bounds || bezierBoundingBox(curve1.p0, curve1.cp1, curve1.cp2, curve1.p1);
+    const box2 = curve2.bounds || bezierBoundingBox(curve2.p0, curve2.cp1, curve2.cp2, curve2.p1);
 
     // Quick reject if boxes don't overlap
     if (!boxesOverlap(box1, box2)) return false;
@@ -172,7 +198,22 @@ function pointsToBezierSegments(points) {
             p1: { x: p2.x, y: p2.y }
         });
     }
+    segments.forEach(curve => {
+        curve.bounds = bezierBoundingBox(curve.p0, curve.cp1, curve.cp2, curve.p1);
+    });
     return segments;
+}
+
+function curveSetBounds(curves) {
+    const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    for (const curve of curves) {
+        const box = curve.bounds || bezierBoundingBox(curve.p0, curve.cp1, curve.cp2, curve.p1);
+        bounds.minX = Math.min(bounds.minX, box.minX);
+        bounds.minY = Math.min(bounds.minY, box.minY);
+        bounds.maxX = Math.max(bounds.maxX, box.maxX);
+        bounds.maxY = Math.max(bounds.maxY, box.maxY);
+    }
+    return bounds;
 }
 
 // ============================================================================
@@ -206,19 +247,32 @@ function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
  * - Skip first few Bezier segments of NEW spiral (branch point area)
  * - Check against ALL segments of existing spirals
  */
-function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
-    // Convert new spiral points to Bezier segments
+function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3, parentId = undefined) {
     const newBeziers = pointsToBezierSegments(newPoints);
+    const bounds = curveSetBounds(newBeziers);
 
     for (const existing of existingSpirals) {
         // Use cached Bezier segments if available, otherwise compute
         const existingBeziers = existing.bezierSegments ||
             (existing.points ? pointsToBezierSegments(existing.points) : null);
 
-        if (!existingBeziers) continue;
-
-        // Check new spiral's Bezier segments (after skip) against all existing segments
-        for (let i = skipSegments; i < newBeziers.length; i++) {
+        if (!existingBeziers || !existingBeziers.length) continue;
+        // Reject distant curves before the expensive segment-pair scan.
+        const existingBounds = existing.bounds || curveSetBounds(existingBeziers);
+        if (!boxesOverlap(bounds, existingBounds)) continue;
+        const sharedStart = newPoints.length && existing.points?.length &&
+            Math.hypot(newPoints[0].x - existing.points[0].x, newPoints[0].y - existing.points[0].y) < 0.001;
+        // Layouts may ignore the branch junction only against the parent (or
+        // another curve starting at that same junction), never an unrelated glyph.
+        const junction = existing.nodeId === parentId || sharedStart;
+        let skip = parentId === undefined || junction ? skipSegments : 0;
+        if (parentId !== undefined && junction) {
+            // Three samples cover much less space on a short/deep glyph.
+            // Permit the same small physical join at every spiral scale.
+            while (skip < newBeziers.length &&
+                Math.hypot(newPoints[skip].x - newPoints[0].x, newPoints[skip].y - newPoints[0].y) < 8) skip++;
+        }
+        for (let i = skip; i < newBeziers.length; i++) {
             for (let j = 0; j < existingBeziers.length; j++) {
                 if (bezierCurvesIntersect(newBeziers[i], existingBeziers[j])) {
                     return true;
@@ -256,7 +310,7 @@ function seededRandoms(seed, count) {
 class SpiralGenerator {
     constructor(options = {}) {
         this.baseLength = options.length || 280;
-        this.baseCurvature = options.curvature || 3.2;  // ~180 degrees of curl
+        this.baseCurvature = options.curvature || (4 * Math.PI);  // Up to 720 degrees of curl
         this.numPoints = options.numPoints || 50;
     }
 
@@ -277,17 +331,29 @@ class SpiralGenerator {
     generateSpiralPoints(centerX, centerY, startAngle = 0, scale = 1, seed = 0, overrides = {}) {
         const points = [];
 
-        // Add randomness based on seed
-        const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
-
         // Apply overrides for collision avoidance
         const lengthScale = overrides.lengthScale ?? 1;
         const curvatureScale = overrides.curvatureScale ?? 1;
         const angleOffset = overrides.angleOffset ?? 0;
 
-        const length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
-        const curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
-        const curvature = this.baseCurvature * (0.85 + rCurve * 0.3) * curvatureSign * curvatureScale;
+        // User-drawn spirals set this flag explicitly
+        const isUserDrawn = overrides.userDrawn === true;
+
+        let length, curvature, curvatureSign;
+        if (isUserDrawn) {
+            // Use exact values without randomness for user-drawn spirals
+            length = this.baseLength * scale * lengthScale;
+            curvatureSign = overrides.curvatureSign ?? 1;
+            curvature = this.baseCurvature * curvatureSign * curvatureScale;
+        } else {
+            // Auto-generated spirals: use ~100° base with slight randomness
+            const [rLen, rCurve, rDir] = seededRandoms(seed, 3);
+            length = this.baseLength * scale * (0.85 + rLen * 0.3) * lengthScale;
+            curvatureSign = overrides.curvatureSign ?? (rDir > 0.5 ? 1 : -1);
+            // Base of 100° (0.139) with small variation up to ~140° (0.194)
+            const autoScale = 0.139 + rCurve * 0.055;
+            curvature = this.baseCurvature * autoScale * curvatureSign * curvatureScale;
+        }
 
         // Apply angle offset
         const adjustedStartAngle = startAngle + angleOffset;
@@ -296,6 +362,12 @@ class SpiralGenerator {
         const dt = 1 / this.numPoints;
         let x = centerX;
         let y = centerY;
+
+        // Calculate spiral tightening factor based on total curvature
+        // More curvature = more tightening to create true spiral effect
+        const totalCurvatureRads = Math.abs(curvature);
+        // Tightening increases with curvature: at 2π (360°), reduce to 30% at end
+        const maxTightening = Math.min(0.85, totalCurvatureRads / (2 * Math.PI) * 0.7);
 
         for (let i = 0; i <= this.numPoints; i++) {
             const t = i / this.numPoints;
@@ -312,9 +384,10 @@ class SpiralGenerator {
             });
 
             // Move along the spiral for next point
-            // Step in the direction of current angle, with step size proportional to length
+            // Decrease step size as we progress to create inward-curling spiral
             if (i < this.numPoints) {
-                const stepSize = length * dt;
+                const tighteningFactor = 1 - t * maxTightening;
+                const stepSize = length * dt * tighteningFactor;
                 x += stepSize * Math.cos(theta);
                 y += stepSize * Math.sin(theta);
             }
@@ -370,6 +443,7 @@ class TreeLayoutEngine {
         this.spiralGenerator = new SpiralGenerator();
         this.occupiedPoints = [];
         this.allSpirals = []; // Track all spirals for intersection detection
+        this.collisionConflicts = []; // Track messages where user prefs caused collisions
     }
 
     /**
@@ -381,6 +455,7 @@ class TreeLayoutEngine {
         // Reset tracking for fresh layout
         this.occupiedPoints = [];
         this.allSpirals = [];
+        this.collisionConflicts = [];
 
         // Build message map and find roots
         const messageMap = new Map();
@@ -422,8 +497,10 @@ class TreeLayoutEngine {
             currentAngle += angleAllocation;
         });
 
-        // DEBUG: Check for pixel coincidence across all spirals
-        debugCheckPixelCoincidence(this.allSpirals);
+        // DEBUG: Check for pixel coincidence across all spirals (opt-in via ?debug=1)
+        if (window.NOMAI_DEBUG) {
+            debugCheckPixelCoincidence(this.allSpirals);
+        }
 
         return Array.from(messageMap.values());
     }
@@ -499,18 +576,40 @@ class TreeLayoutEngine {
     /**
      * Generate parameter variations for collision avoidance.
      * Returns an array of override objects to try in order.
+     * @param {number} seed - Seed for deterministic randomness
+     * @param {Object} userOverrides - User-specified overrides to respect
      */
-    generateParameterVariations(seed) {
+    generateParameterVariations(seed, userOverrides = {}) {
         const variations = [];
         const [rDir] = seededRandoms(seed, 1);
         const preferredSign = rDir > 0.5 ? 1 : -1;
 
-        // Try different combinations: curvature direction, length, curvature tightness, angle offset
-        const curvatureSigns = [preferredSign, -preferredSign];
-        const lengthScales = [1.0, 0.7, 0.5, 0.35];
-        const curvatureScales = [1.0, 0.6, 0.3];
-        // Much wider angle range - full circle coverage
-        const angleOffsets = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
+        // Respect user curvature direction if specified, otherwise try both
+        const curvatureSigns = userOverrides.curvatureSign !== undefined
+            ? [userOverrides.curvatureSign]
+            : [preferredSign, -preferredSign];
+
+        // Respect user length scale if specified (from drawn spiral), otherwise try variations
+        const lengthScales = userOverrides.lengthScale !== undefined
+            ? [userOverrides.lengthScale]
+            : (userOverrides.reserveBranchRoom ? [1.0, 0.85, 0.7] : [1.0, 0.7, 0.5, 0.35]);
+
+        // Respect user curvature tightness if specified, otherwise try variations
+        const baseTightness = userOverrides.curvatureScale ?? 1.0;
+        let curvatureScales = userOverrides.curvatureScale !== undefined
+            ? [baseTightness, baseTightness * 0.8, baseTightness * 1.2].filter(s => s >= 0.1 && s <= 1.5)
+            : [1.0, 0.6, 0.3];
+        // Ensure we always have at least one value
+        if (curvatureScales.length === 0) {
+            curvatureScales = [baseTightness];
+        }
+
+        // If user drew the spiral, don't vary angle
+        // Otherwise try wider angle range for collision avoidance
+        const isUserDrawn = userOverrides.userDrawn === true;
+        const angleOffsets = isUserDrawn
+            ? [0]
+            : [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5, Math.PI, -Math.PI];
 
         // Generate variations - try angle offsets first (most effective for avoiding collisions)
         for (const angleOffset of angleOffsets) {
@@ -521,13 +620,44 @@ class TreeLayoutEngine {
                             curvatureSign,
                             lengthScale,
                             curvatureScale,
-                            angleOffset
+                            angleOffset,
+                            userDrawn: isUserDrawn
                         });
                     }
                 }
             }
         }
 
+        if (!isUserDrawn) {
+            for (let step = 0; step < 48; step++) {
+                const angleOffset = step * Math.PI / 24;
+                for (const curvatureSign of curvatureSigns) {
+                    for (const lengthScale of lengthScales) {
+                        variations.push({ curvatureSign, lengthScale, curvatureScale: 0.3, angleOffset, userDrawn: false });
+                    }
+                }
+            }
+        }
+        if (userOverrides.lengthScale === undefined && !userOverrides.reserveBranchRoom) {
+            // Dense conversations can leave a small pocket of free wall.
+            // Exhaust full-size choices before trying a compact glyph there.
+            const fullSize = variations.filter(v => v.lengthScale === 1);
+            for (const lengthScale of [0.2, 0.12]) {
+                variations.push(...fullSize.map(v => ({ ...v, lengthScale })));
+            }
+        }
+        if (userOverrides.autoAdjust) {
+            // Keep the exact drawn shape as the first candidate, then allow
+            // direction and size to change when the user chose Auto-adjust.
+            const flexible = { ...userOverrides };
+            delete flexible.autoAdjust;
+            delete flexible.lengthScale;
+            delete flexible.curvatureScale;
+            flexible.userDrawn = false;
+            const extra = this.generateParameterVariations(seed, flexible)
+                .map(v => ({ ...v, userDrawn: isUserDrawn }));
+            variations.push(...extra);
+        }
         return variations;
     }
 
@@ -538,51 +668,116 @@ class TreeLayoutEngine {
      * If node has saved layout_data, uses those parameters for deterministic replay.
      */
     layoutSubtree(node, startX, startY, startAngle, depth, allocatedAngle, parentSpiralData) {
-        // Scale down spirals for deeper messages
-        const scale = Math.max(0.4, 1 - (depth - 1) * 0.15);
+        // Check for saved layout data first to determine if user-drawn
+        const savedLayout = parseLayoutData(node.layout_data);
+        const userPrefs = savedLayout?.userPrefs || {};
+        const seed = savedLayout?.seed ?? node.id;
+
+        // Scale down spirals for deeper messages, but not for user-drawn spirals
+        // User-drawn spirals should maintain their exact drawn size
+        // Check both userPrefs (initial creation) and saved overrides (after layout save)
+        const isUserDrawn = userPrefs.userDrawn === true ||
+            (savedLayout?.overrides?.userDrawn === true);
+        const scale = isUserDrawn ? 1.0 : Math.max(0.4, 1 - (depth - 1) * 0.15);
 
         let points = null;
         let usedOverrides = {};
 
-        // Check for saved layout data
-        const savedLayout = node.layout_data ? JSON.parse(node.layout_data) : null;
-
         if (savedLayout && savedLayout.overrides) {
-            // Use saved overrides for deterministic replay
+            // Use saved position and overrides for deterministic replay
+            const savedStartX = savedLayout.offsetX !== undefined
+                ? this.centerX + savedLayout.offsetX
+                : startX;
+            const savedStartY = savedLayout.offsetY !== undefined
+                ? this.centerY + savedLayout.offsetY
+                : startY;
+            const savedStartAngle = savedLayout.startAngle !== undefined
+                ? savedLayout.startAngle
+                : startAngle;
+
             usedOverrides = savedLayout.overrides;
+            if (savedLayout.seed === undefined) node.needsLayoutSave = true;
             points = this.spiralGenerator.generateSpiralPoints(
-                startX, startY, startAngle, scale, node.id, usedOverrides
+                savedStartX, savedStartY, savedStartAngle, scale, seed, usedOverrides
             );
+
+            // Update startX/Y/Angle for this node's children to use
+            startX = savedStartX;
+            startY = savedStartY;
+            startAngle = savedStartAngle;
         } else {
+            // Apply user preferences to initial overrides
+            const userOverrides = {};
+            const hasUserPrefs = Object.keys(userPrefs).length > 0;
+            if (userPrefs.curvatureDir === 'cw') {
+                userOverrides.curvatureSign = 1;
+            } else if (userPrefs.curvatureDir === 'ccw') {
+                userOverrides.curvatureSign = -1;
+            }
+            if (userPrefs.curvatureTightness !== undefined) {
+                userOverrides.curvatureScale = userPrefs.curvatureTightness;
+            }
+            if (userPrefs.lengthScale !== undefined) {
+                userOverrides.lengthScale = userPrefs.lengthScale;
+            }
+            if (userPrefs.userDrawn) {
+                userOverrides.userDrawn = true;
+            }
+
+            // If user specified exact startAngle, use it directly (from drawn spiral)
+            if (userPrefs.startAngle !== undefined) {
+                startAngle = userPrefs.startAngle;
+            }
+
+            userOverrides.autoAdjust = userPrefs.autoAdjust === true;
+            userOverrides.reserveBranchRoom = node.children.length > 0;
             // Generate parameter variations for collision avoidance
-            const variations = this.generateParameterVariations(node.id);
+            const variations = this.generateParameterVariations(seed, userOverrides);
 
-            // Try each variation until we find one that doesn't intersect
+            // If an automatic branch is boxed in, try another point on its
+            // parent before accepting an overlap. Explicit placements only
+            // move when the writer chose Auto-adjust.
+            const starts = [{ x: startX, y: startY }];
+            if (parentSpiralData && (!isUserDrawn || userPrefs.autoAdjust)) {
+                for (const t of [0.25, 0.4, 0.55, 0.7, 0.85, 0.95]) {
+                    starts.push(parentSpiralData.points[Math.floor(t * (parentSpiralData.points.length - 1))]);
+                }
+                for (let i = 2; i < parentSpiralData.points.length; i += 2) {
+                    const candidate = parentSpiralData.points[i];
+                    if (!starts.some(p => p.x === candidate.x && p.y === candidate.y)) starts.push(candidate);
+                }
+            }
             let foundNonIntersecting = false;
-            for (let attempt = 0; attempt < variations.length; attempt++) {
-                const overrides = variations[attempt];
-
-                points = this.spiralGenerator.generateSpiralPoints(
-                    startX, startY, startAngle, scale, node.id, overrides
-                );
-
-                // Check for intersection with existing spirals
-                const intersects = checkSpiralIntersection(points, this.allSpirals);
-                if (!intersects) {
-                    usedOverrides = overrides;
-                    foundNonIntersecting = true;
-                    break; // Found a non-intersecting configuration
-                }
-
-                // If this is the last attempt, use it anyway (best effort)
-                if (attempt === variations.length - 1) {
-                    usedOverrides = overrides;
-                    console.warn(`Node ${node.id}: Could not find non-intersecting config after ${variations.length} attempts`);
+            let userPrefsCollided = false;
+            search: for (let placement = 0; placement < starts.length; placement++) {
+                startX = starts[placement].x;
+                startY = starts[placement].y;
+                for (let attempt = 0; attempt < variations.length; attempt++) {
+                    usedOverrides = variations[attempt];
+                    points = this.spiralGenerator.generateSpiralPoints(startX, startY, startAngle, scale, seed, usedOverrides);
+                    const intersects = !userPrefs.allowOverlap && checkSpiralIntersection(points, this.allSpirals, 3, node.parent_id);
+                    if (!intersects) {
+                        foundNonIntersecting = true;
+                        userPrefsCollided = hasUserPrefs && (placement > 0 || attempt > 0);
+                        break search;
+                    }
                 }
             }
-            if (foundNonIntersecting) {
-                console.log(`Node ${node.id}: Found non-intersecting config, allSpirals count: ${this.allSpirals.length}`);
+            if (!foundNonIntersecting) {
+                userPrefsCollided = hasUserPrefs;
+                console.warn(`Node ${node.id}: Could not find non-intersecting placement`);
             }
+
+            // Track collision conflict for user notification
+            if (userPrefsCollided) {
+                this.collisionConflicts.push({
+                    nodeId: node.id,
+                    writerName: node.writer_name,
+                    userPrefs: userPrefs,
+                    usedOverrides: usedOverrides
+                });
+            }
+
             // Mark that this node needs its layout saved
             node.needsLayoutSave = true;
         }
@@ -611,6 +806,7 @@ class TreeLayoutEngine {
             scale: scale,
             // Layout params for persistence (normalized to canvas center)
             layoutParams: {
+                seed,
                 offsetX: startX - this.centerX,
                 offsetY: startY - this.centerY,
                 startAngle: startAngle,
@@ -625,6 +821,7 @@ class TreeLayoutEngine {
         this.allSpirals.push({
             points,
             bezierSegments,
+            bounds: curveSetBounds(bezierSegments),
             nodeId: node.id,
             parentId: node.parent_id
         });
@@ -644,23 +841,34 @@ class TreeLayoutEngine {
             // Distribute children along the parent spiral (from 30% to 85% of the way)
             // with some randomness based on child ID
             node.children.forEach((child, index) => {
-                // Base branch point distributed along the spiral
-                const baseT = 0.3 + (index / Math.max(1, numChildren - 1)) * 0.55;
+                // Check for user-specified branch point
+                const childSavedLayout = parseLayoutData(child.layout_data);
+                const childUserPrefs = childSavedLayout?.userPrefs || {};
 
-                // Add randomness to branch point
-                const [rBranch] = seededRandoms(child.id + 500, 1);
-                const branchT = Math.max(0.25, Math.min(0.9, baseT + (rBranch - 0.5) * 0.15));
+                let branchT;
+                if (childUserPrefs.branchT !== undefined) {
+                    // User specified exact branch point
+                    branchT = childUserPrefs.branchT;
+                } else {
+                    // Base branch point distributed along the spiral
+                    const baseT = 0.3 + (index / Math.max(1, numChildren - 1)) * 0.55;
+
+                    // Add randomness to branch point
+                    const [rBranch] = seededRandoms((childSavedLayout?.seed ?? child.id) + 500, 1);
+                    branchT = Math.max(0.25, Math.min(0.9, baseT + (rBranch - 0.5) * 0.15));
+                }
 
                 // Get the point along parent where child branches
-                const branchIndex = Math.floor(branchT * (points.length - 1));
+                const branchIndex = childUserPrefs.branchT !== undefined
+                    ? Math.round(branchT * (points.length - 1))
+                    : Math.floor(branchT * (points.length - 1));
                 const branchPoint = points[branchIndex];
 
                 // Child starts at this branch point
                 const childStartX = branchPoint.x;
                 const childStartY = branchPoint.y;
 
-                // Check for saved child angle
-                const childSavedLayout = child.layout_data ? JSON.parse(child.layout_data) : null;
+                // Check for saved child angle (reuse childSavedLayout from above)
                 let childAngle;
 
                 if (childSavedLayout && childSavedLayout.startAngle !== undefined) {
@@ -740,17 +948,12 @@ function debugCheckPixelCoincidence(spirals) {
         // Get densely sampled points along the Bezier curve
         const sampledPoints = sampleBezierCurve(spiral.points, samplesPerSegment);
 
-        console.log(`Spiral ${spiralIndex} (nodeId=${spiral.nodeId}, parentId=${spiral.parentId}): ${sampledPoints.length} sampled points (skipping first ${skipPoints})`);
-
         // Skip first few points (start/branch area)
         sampledPoints.slice(skipPoints).forEach((point, pointIndex) => {
             // Round to pixel coordinates
             const px = Math.round(point.x);
             const py = Math.round(point.y);
             const key = `${px},${py}`;
-
-            // Log every pixel
-            console.log(`  Spiral ${spiralIndex}, point ${pointIndex + skipPoints}: pixel (${px}, ${py})`);
 
             if (!pixelMap.has(key)) {
                 pixelMap.set(key, []);
