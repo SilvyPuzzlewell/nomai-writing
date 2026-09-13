@@ -1422,13 +1422,71 @@ textarea:focus-visible {
 #reading-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 6px;
     margin-top: 10px;
+}
+.view-switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-family: var(--font-heading);
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+}
+.view-switch input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+}
+.view-switch-track {
+    position: relative;
+    width: 26px;
+    height: 14px;
+    border-radius: 7px;
+    background: var(--border-strong);
+    transition: background 0.15s;
+}
+.view-switch-track::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: transform 0.15s, background 0.15s;
+}
+.view-switch input:checked + .view-switch-track {
+    background: rgba(0, 217, 255, 0.35);
+}
+.view-switch input:checked + .view-switch-track::after {
+    background: var(--curve-color);
+    transform: translateX(12px);
+}
+.view-switch:has(input:focus-visible) {
+    outline: 2px solid var(--curve-color);
+    outline-offset: 2px;
 }
 #conversation-outline {
     flex-shrink: 0;
     border-bottom: 1px solid var(--border-color);
     min-height: 0;
+}
+#conversation-outline[open] {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
 }
 #outline-summary {
     cursor: pointer;
@@ -1447,6 +1505,10 @@ textarea:focus-visible {
     overscroll-behavior: contain;
     padding: 0 12px 12px;
     touch-action: pan-y;
+}
+#conversation-outline[open] #outline-list {
+    flex: 1;
+    max-height: none;
 }
 #outline-list ol { list-style: none; }
 #outline-list ol ol {
@@ -1491,10 +1553,10 @@ textarea:focus-visible {
 .outline-preview {
     display: block;
     font-size: 12px;
+    line-height: 1.5;
     margin-top: 3px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
 }
 #thread-updates {
     font-size: 12px;
@@ -1504,9 +1566,11 @@ textarea:focus-visible {
 }
 #thread-updates:empty { display: none; }
 #message-content { min-height: 0; }
+#conversation-outline:not(.hidden) ~ #message-content { display: none; }
 #canvas-container[aria-busy="true"] { pointer-events: none; opacity: 0.65; }
 @media (max-width: 900px) {
     #reading-actions .btn, #write-message-btn { min-height: 40px; }
+    .view-switch { min-height: 40px; }
     #translation-panel.sheet-peek #conversation-outline,
     #translation-panel.sheet-peek #reading-actions,
     #translation-panel.sheet-peek #thread-updates { display: none; }

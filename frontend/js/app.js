@@ -51,6 +51,8 @@ class NomaiApp {
         this.translationSaves = new Map();
         this.composerVersion = 0;
         this.threads = [];
+        this.threadedConversation = false;
+        this.conversationVisible = false;
 
         // Drawing mode state
         this.drawnSpiralParams = null; // Stores { branchT, curvatureDir, curvatureTightness, startAngle }
@@ -168,11 +170,13 @@ class NomaiApp {
     bindUIEvents() {
         this.bindHeaderMenu();
         document.getElementById('write-message-btn').addEventListener('click', () => this.showMessageModal());
-        document.getElementById('reply-message-btn').addEventListener('click', () => {
-            if (this.selectedMessage) this.showMessageModal(this.selectedMessage);
-        });
         document.getElementById('translate-message-btn').addEventListener('click', () => {
             if (this.selectedMessage && !this.foregroundLoading) this.handleMouseDown(this.selectedMessage);
+        });
+        const threadedToggle = document.getElementById('threaded-view-toggle');
+        threadedToggle.checked = this.threadedConversation;
+        threadedToggle.addEventListener('change', event => {
+            this.setThreadedConversation(event.currentTarget.checked);
         });
 
         // Thread selector
@@ -730,9 +734,9 @@ class NomaiApp {
         for (const id of ['clear-thread-btn', 'regenerate-btn']) {
             document.getElementById(id).classList.toggle('hidden', !owner);
         }
-        for (const id of ['collaborators-btn', 'write-message-btn', 'conversation-outline']) {
-            document.getElementById(id).classList.toggle('hidden', !active);
-        }
+        document.getElementById('collaborators-btn').classList.toggle('hidden', !active);
+        this.updateWriteMessageVisibility();
+        this.updateConversationVisibility();
         if (collaborators !== null) document.getElementById('notify-btn').classList.toggle('hidden', !active || !collaborators?.length);
     }
 
@@ -740,7 +744,30 @@ class NomaiApp {
         if (this.outline) this.outline.render(this.canvas);
         const unread = this.canvas.messages.filter(m => !this.canvas.translatedIds.has(m.id)).length;
         document.getElementById('thread-unread-count').textContent = unread ? `${unread} unread` : 'All translated';
+        this.updateWriteMessageVisibility();
         this.updateReadingActions();
+    }
+
+    updateWriteMessageVisibility() {
+        const canStartConversation = !!this.currentThreadId && this.canvas.messages.length === 0;
+        document.getElementById('write-message-btn').classList.toggle('hidden', !canStartConversation);
+    }
+
+    updateConversationVisibility() {
+        const outline = document.getElementById('conversation-outline');
+        const show = !!this.currentThreadId && this.threadedConversation;
+        const wasShowing = !!this.conversationVisible;
+        this.conversationVisible = show;
+        outline.classList.toggle('hidden', !show);
+        if (!show) outline.open = false;
+        else if (!wasShowing) outline.open = true;
+    }
+
+    setThreadedConversation(threaded) {
+        this.threadedConversation = !!threaded;
+        document.getElementById('threaded-view-toggle').checked = this.threadedConversation;
+        this.updateConversationVisibility();
+        this.updateConversation();
     }
 
     updateReadingActions() {
@@ -1442,6 +1469,9 @@ class NomaiApp {
 
         const writerEl = document.getElementById('writer-name');
         if (writerEl) writerEl.classList.toggle('translated', progress >= 1);
+        if (this.threadedConversation && this.outline && this.selectedMessage) {
+            this.outline.updateTranslation(this.selectedMessage, progress);
+        }
 
         this.updatePeekPreview();
     }
@@ -1589,21 +1619,23 @@ class NomaiApp {
         }
     }
 
-    /**
-     * Show message creation modal (for + button, no pre-drawn spiral).
-     */
-    showMessageModal(parent = null) {
+    /** Show the root-message composer for an empty conversation. */
+    showMessageModal() {
         if (!this.currentThreadId || this.foregroundLoading) {
             toast.info('Select or create a thread first.');
+            return;
+        }
+        if (this.canvas.messages.length) {
+            toast.info('Draw from a spiral to write a reply.');
             return;
         }
 
         this.stopTranslation();
         this.interaction.cancelDrawing();
-        this.handleMessageSelect(parent);
+        this.handleMessageSelect(null);
         this.composerVersion++;
         this.composerThreadId = this.currentThreadId;
-        document.getElementById('message-modal-title').textContent = parent ? 'Write a reply' : 'Write a message';
+        document.getElementById('message-modal-title').textContent = 'Write a message';
         this.openModal(document.getElementById('message-modal'));
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
@@ -1638,6 +1670,14 @@ class NomaiApp {
         if (!content) { toast.info('Enter a message first.'); return; }
         const parentId = this.selectedMessage ? this.selectedMessage.id : null;
         const spiralPrefs = this.collectSpiralPreferences();
+        if (parentId && !spiralPrefs?.userDrawn) {
+            toast.info('Draw from a spiral to write a reply.');
+            return;
+        }
+        if (!parentId && this.canvas.messages.length) {
+            toast.info('Draw from a spiral to write a reply.');
+            return;
+        }
         this.submittingMessage = true;
         const button = document.getElementById('add-message-btn');
         button.disabled = true;

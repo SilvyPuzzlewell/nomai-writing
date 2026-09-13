@@ -22,11 +22,34 @@ class ConversationOutline {
         });
     }
 
+    updateButtonTranslation(button, message, progress) {
+        const translated = progress >= 1;
+        const charsToShow = Math.floor(Math.max(0, Math.min(1, progress)) * message.content.length);
+        const preview = button.querySelector('.outline-preview');
+        const shown = message.content.slice(0, charsToShow);
+        preview.textContent = progress > 0
+            ? (shown || (translated ? 'Empty message' : 'Translating…'))
+            : 'Untranslated message';
+        button.classList.toggle('is-translated', translated);
+        const state = translated ? 'Translated. ' : (progress > 0 ? 'Translating. ' : 'Untranslated message');
+        button.setAttribute('aria-label', message.writer_name + ': ' + state +
+            (progress > 0 ? preview.textContent : ''));
+    }
+
+    updateTranslation(message, progress) {
+        const button = [...this.element.querySelectorAll('button[data-message-id]')]
+            .find(candidate => Number(candidate.dataset.messageId) === message.id);
+        if (button) this.updateButtonTranslation(button, message, progress);
+    }
+
     render(canvas) {
         const focused = this.element.contains(document.activeElement)
             ? document.activeElement.dataset.messageId : null;
         const scroll = this.element.scrollTop;
-        const visible = canvas.messages.filter(m => canvas.visibleMessageIds.has(m.id));
+        const currentBranch = canvas.selectedPath || new Set();
+        const visible = canvas.messages.filter(message =>
+            canvas.visibleMessageIds.has(message.id) && currentBranch.has(message.id)
+        );
         const byId = new Map(visible.map(m => [m.id, m]));
         const children = new Map();
         for (const message of visible) {
@@ -47,19 +70,16 @@ class ConversationOutline {
                 button.dataset.messageId = message.id;
                 if (message.id === canvas.selectedId) button.setAttribute('aria-current', 'true');
                 if (canvas.selectedPath.has(message.id)) button.classList.add('on-path');
-                const translated = canvas.translatedIds.has(message.id);
-                button.classList.toggle('is-translated', translated);
                 const writer = document.createElement('span');
                 writer.className = 'outline-writer';
                 writer.textContent = message.writer_name;
                 const preview = document.createElement('span');
                 preview.className = 'outline-preview';
-                preview.textContent = translated
-                    ? (message.content.replace(/\s+/g, ' ').slice(0, 100) || 'Empty message')
-                    : 'Untranslated message';
-                button.setAttribute('aria-label', message.writer_name + ': ' +
-                    (translated ? 'Translated. ' + preview.textContent : 'Untranslated message'));
                 button.append(writer, preview);
+                const progress = typeof canvas.getTransitionProgress === 'function'
+                    ? canvas.getTransitionProgress(message.id)
+                    : (canvas.translatedIds.has(message.id) ? 1 : 0);
+                this.updateButtonTranslation(button, message, progress);
                 item.append(button);
                 if (children.has(message.id)) item.append(build(message.id));
                 list.append(item);
@@ -71,7 +91,9 @@ class ConversationOutline {
         } else {
             const hint = document.createElement('p');
             hint.className = 'hint';
-            hint.textContent = 'Write a message to start this conversation.';
+            hint.textContent = canvas.messages.length
+                ? 'Select a spiral to view its conversation branch.'
+                : 'Write a message to start this conversation.';
             this.element.replaceChildren(hint);
         }
         if (focused) {
