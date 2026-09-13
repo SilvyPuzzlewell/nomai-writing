@@ -2,6 +2,7 @@
 class ConversationOutline {
     constructor(element, onSelect) {
         this.element = element;
+        this.maxDepth = 0;
         element.addEventListener('click', event => {
             const button = event.target.closest('button[data-message-id]');
             if (button) onSelect(Number(button.dataset.messageId));
@@ -20,6 +21,30 @@ class ConversationOutline {
                 buttons[next].focus();
             }
         });
+        if (typeof ResizeObserver !== 'undefined') {
+            this.resizeObserver = new ResizeObserver(() => this.updateIndent());
+            this.resizeObserver.observe(element);
+        }
+    }
+
+    /** Keep deep replies readable by sharing the available indent budget. */
+    static calculateIndent(maxDepth, width) {
+        const defaultIndent = 18;
+        if (maxDepth <= 0 || !Number.isFinite(width) || width <= 0) return defaultIndent;
+
+        const horizontalPadding = 24;
+        const minimumMessageWidth = 180;
+        const indentBudget = Math.max(0, width - horizontalPadding - minimumMessageWidth);
+        const step = Math.min(defaultIndent + 1, indentBudget / maxDepth);
+        const indent = step >= 2 ? step - 1 : step / 2;
+        return Math.round(indent * 100) / 100;
+    }
+
+    updateIndent() {
+        const width = this.element.clientWidth;
+        if (!width) return;
+        const indent = ConversationOutline.calculateIndent(this.maxDepth, width);
+        this.element.style.setProperty('--outline-indent', `${indent}px`);
     }
 
     updateButtonTranslation(button, message, progress) {
@@ -58,11 +83,13 @@ class ConversationOutline {
             children.get(parent).push(message);
         }
         const visited = new Set();
-        const build = parent => {
+        let maxDepth = 0;
+        const build = (parent, depth = 0) => {
             const list = document.createElement('ol');
             for (const message of children.get(parent) || []) {
                 if (visited.has(message.id)) continue;
                 visited.add(message.id);
+                maxDepth = Math.max(maxDepth, depth);
                 const item = document.createElement('li');
                 const button = document.createElement('button');
                 button.type = 'button';
@@ -81,7 +108,7 @@ class ConversationOutline {
                     : (canvas.translatedIds.has(message.id) ? 1 : 0);
                 this.updateButtonTranslation(button, message, progress);
                 item.append(button);
-                if (children.has(message.id)) item.append(build(message.id));
+                if (children.has(message.id)) item.append(build(message.id, depth + 1));
                 list.append(item);
             }
             return list;
@@ -96,6 +123,8 @@ class ConversationOutline {
                 : 'Write a message to start this conversation.';
             this.element.replaceChildren(hint);
         }
+        this.maxDepth = maxDepth;
+        this.updateIndent();
         if (focused) {
             const button = [...this.element.querySelectorAll('button')]
                 .find(b => b.dataset.messageId === focused);
