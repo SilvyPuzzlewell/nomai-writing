@@ -1481,6 +1481,7 @@ textarea:focus-visible {
     flex-shrink: 0;
     border-bottom: 1px solid var(--border-color);
     min-height: 0;
+    position: relative;
 }
 #conversation-outline[open] {
     display: flex;
@@ -1500,6 +1501,8 @@ textarea:focus-visible {
     margin-left: 6px;
 }
 #outline-list {
+    --outline-indent: 18px;
+    min-height: 0;
     max-height: min(30vh, 250px);
     overflow: auto;
     overscroll-behavior: contain;
@@ -1507,14 +1510,18 @@ textarea:focus-visible {
     touch-action: pan-y;
 }
 #conversation-outline[open] #outline-list {
-    flex: 1;
+    /* Chromium lays <details> contents through an internal wrapper, so this
+       list is not reliably sized as a flex child. Pin it below the summary
+       to give the overflow container a definite viewport. */
+    position: absolute;
+    inset: 42px 0 0;
     max-height: none;
 }
 #outline-list ol { list-style: none; }
 #outline-list ol ol {
-    margin-left: 10px;
-    padding-left: 8px;
-    border-left: 1px solid var(--border-strong);
+    margin-left: min(10px, var(--outline-indent));
+    padding-left: max(0px, calc(var(--outline-indent) - 10px));
+    border-left: min(1px, var(--outline-indent)) solid var(--border-strong);
 }
 .outline-message {
     display: block;
