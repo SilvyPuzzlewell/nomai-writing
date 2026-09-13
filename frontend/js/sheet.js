@@ -95,6 +95,11 @@ class BottomSheet {
         this.el.classList.toggle('sheet-peek', state === BottomSheet.PEEK);
         this.el.classList.toggle('sheet-half', state === BottomSheet.HALF);
         this.el.classList.toggle('sheet-full', state === BottomSheet.FULL);
+        const handle = this.el.querySelector('#sheet-handle');
+        if (handle) {
+            handle.setAttribute('aria-expanded', String(state !== BottomSheet.PEEK));
+            handle.setAttribute('aria-label', state === BottomSheet.PEEK ? 'Expand translation panel' : 'Collapse translation panel');
+        }
 
         if (!this.enabled) return;
 
@@ -145,6 +150,11 @@ class BottomSheet {
     bindGrabs() {
         for (const el of this.grabs) {
             el.addEventListener('pointerdown', (e) => this.onPointerDown(e, el));
+            if (el.id === 'sheet-handle') el.addEventListener('click', event => {
+                // Pointer taps are handled on release; native keyboard clicks
+                // have no pointer gesture and still need an accessible action.
+                if (event.detail === 0) this.snapTo(this.state === BottomSheet.PEEK ? BottomSheet.HALF : BottomSheet.PEEK);
+            });
         }
         this.el.addEventListener('pointermove', (e) => this.onPointerMove(e));
         this.el.addEventListener('pointerup', (e) => this.onPointerUp(e));
@@ -154,7 +164,7 @@ class BottomSheet {
     onPointerDown(event, grabEl) {
         if (!this.enabled) return;
         // Controls inside the header (e.g. Delete) keep their own taps
-        if (event.target.closest('button, a, input, select, textarea')) return;
+        if (event.target.closest('button, a, input, select, textarea') && grabEl.id !== 'sheet-handle') return;
 
         this.drag = {
             id: event.pointerId,

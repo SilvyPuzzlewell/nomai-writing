@@ -339,6 +339,11 @@ class InteractionHandler {
         this.branchT = 0;
         this.gesturePath = [];
         this.gestureAnchor = null;
+        this.skipBranchRelease = false;
+        this.activeMessage = null;
+        this.isMouseDown = false;
+        this.panSession = null;
+        this.holdStartScreen = null;
         this.onDrawingCancel();
         this.canvas.canvas.style.cursor = 'default';
     }
@@ -423,6 +428,7 @@ class InteractionHandler {
             // Double-click on spiral → enter branch selection mode
             this.parentMessage = message;
             this.drawingState = InteractionHandler.STATE_SELECTING_BRANCH;
+            this.skipBranchRelease = this.pressDrag;
 
             // Find initial branch point
             const pointInfo = this.findClosestPointOnSpiral(coords.x, coords.y, message);
@@ -500,6 +506,10 @@ class InteractionHandler {
             this.isMouseDown = false;
 
             if (this.drawingState === InteractionHandler.STATE_SELECTING_BRANCH) {
+                if (this.skipBranchRelease) {
+                    this.skipBranchRelease = false;
+                    return;
+                }
                 if (coords) this.confirmBranchPoint(coords);
                 return;
             }

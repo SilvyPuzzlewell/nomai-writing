@@ -32,7 +32,9 @@ async function apiCall(url, options, fallbackMsg) {
         } catch (e) {
             // Non-JSON error body - keep the fallback message
         }
-        throw new Error(msg);
+        const error = new Error(msg);
+        error.status = response.status;
+        throw error;
     }
     return response.json();
 }

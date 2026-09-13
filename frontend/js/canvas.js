@@ -7,6 +7,9 @@ class NomaiCanvas {
         this.ctx = canvasElement.getContext('2d');
         this.messages = [];
         this.selectedId = null;
+        this.selectedPath = new Set();
+        this.onVisibilityChange = null;
+        this.revealTimers = new Set();
         this.hoveredId = null;
         this.translatedIds = new Set(); // Track which messages have been translated
         this.transitionProgress = new Map(); // Track color transition progress (id -> progress 0-1)
@@ -460,9 +463,7 @@ class NomaiCanvas {
         this.height = height;
 
         // Update layout engine
-        if (this.layoutEngine) {
-            this.layoutEngine.updateDimensions(this.width, this.height);
-        } else {
+        if (!this.layoutEngine) {
             this.layoutEngine = new TreeLayoutEngine(this.width, this.height);
         }
 
@@ -556,6 +557,7 @@ class NomaiCanvas {
      */
     setMessagesProgressiveReveal(messages, onLayoutsGenerated = null, onMessageRevealed = null, preserveCamera = false) {
         this.cancelAnimation();
+        if (!preserveCamera) this.layoutEngine.updateDimensions(this.width, this.height);
         this.rawMessages = messages;
         this.relayout();
         this.useProgressiveReveal = true;
@@ -563,10 +565,9 @@ class NomaiCanvas {
 
         // Initially reveal only root messages
         this.revealedIds = new Set();
+        const ids = new Set(this.messages.map(m => m.id));
         this.messages.forEach(m => {
-            if (m.parent_id === null) {
-                this.revealedIds.add(m.id);
-            }
+            if (m.parent_id === null || !ids.has(m.parent_id)) this.revealedIds.add(m.id);
         });
 
         // Also add already-translated messages and their ancestors to revealed set
@@ -619,8 +620,13 @@ class NomaiCanvas {
                 this.revealedIds.add(child.id);
                 this.visibleMessageIds.add(child.id);
                 this.startDrawAnimation(child.id, drawDuration);
+                if (this.onVisibilityChange) this.onVisibilityChange();
                 index++;
-                this.animationTimeout = setTimeout(startNextAnimation, delay);
+                const timer = setTimeout(() => {
+                    this.revealTimers.delete(timer);
+                    startNextAnimation();
+                }, delay);
+                this.revealTimers.add(timer);
             } else {
                 this.animationTimeout = null;
             }
@@ -699,6 +705,11 @@ class NomaiCanvas {
      * Cancel any ongoing animation.
      */
     cancelAnimation() {
+        this.revealTimers.forEach(timer => clearTimeout(timer));
+        this.revealTimers.clear();
+        this.drawAnimations.forEach(id => cancelAnimationFrame(id));
+        this.drawAnimations.clear();
+        this.drawProgress.clear();
         if (this.animationTimeout) {
             clearTimeout(this.animationTimeout);
             this.animationTimeout = null;
@@ -724,7 +735,7 @@ class NomaiCanvas {
         // Apply cached layouts to rawMessages so existing spirals stay fixed
         if (this.rawMessages && this.layoutCache.size > 0) {
             this.rawMessages.forEach(msg => {
-                if (this.layoutCache.has(msg.id)) {
+                if (!msg.layout_data && this.layoutCache.has(msg.id)) {
                     msg.layout_data = this.layoutCache.get(msg.id);
                 }
             });
@@ -735,12 +746,7 @@ class NomaiCanvas {
         // Cache all computed layouts for future relayouts
         this.messages.forEach(msg => {
             if (msg.spiralData && msg.spiralData.layoutParams) {
-                this.layoutCache.set(msg.id, JSON.stringify({
-                    offsetX: msg.spiralData.layoutParams.offsetX,
-                    offsetY: msg.spiralData.layoutParams.offsetY,
-                    startAngle: msg.spiralData.layoutParams.startAngle,
-                    overrides: msg.spiralData.layoutParams.overrides
-                }));
+                this.layoutCache.set(msg.id, JSON.stringify(msg.spiralData.layoutParams));
             }
         });
     }
@@ -753,12 +759,7 @@ class NomaiCanvas {
         const layouts = {};
         this.messages.forEach(msg => {
             if (msg.needsLayoutSave && msg.spiralData && msg.spiralData.layoutParams) {
-                layouts[msg.id] = JSON.stringify({
-                    offsetX: msg.spiralData.layoutParams.offsetX,
-                    offsetY: msg.spiralData.layoutParams.offsetY,
-                    startAngle: msg.spiralData.layoutParams.startAngle,
-                    overrides: msg.spiralData.layoutParams.overrides
-                });
+                layouts[msg.id] = JSON.stringify(msg.spiralData.layoutParams);
             }
         });
         return layouts;
@@ -926,14 +927,18 @@ class NomaiCanvas {
         this.messages.forEach(msg => {
             if (!msg.spiralData) return;
             // Skip if not visible (during animated loading)
-            if (this.visibleMessageIds.size > 0 && !this.visibleMessageIds.has(msg.id)) return;
+            if (this.useProgressiveReveal && !this.visibleMessageIds.has(msg.id)) return;
 
             const isSelected = msg.id === this.selectedId;
             const isHovered = msg.id === this.hoveredId && !isSelected;
             const isTranslated = this.translatedIds.has(msg.id);
             const progress = this.transitionProgress.get(msg.id) || 0;
 
-            this.drawSpiral(msg, { isSelected, isHovered, isTranslated, transitionProgress: progress });
+            const isAncestor = !isSelected && this.selectedPath.has(msg.id);
+            ctx.save();
+            if (this.selectedPath.size && !this.selectedPath.has(msg.id) && !isHovered) ctx.globalAlpha = 0.35;
+            this.drawSpiral(msg, { isSelected, isHovered, isAncestor, isTranslated, transitionProgress: progress });
+            ctx.restore();
         });
 
         // Draw branch point marker
@@ -1019,7 +1024,7 @@ class NomaiCanvas {
     /**
      * Draw a single spiral with effects.
      */
-    drawSpiral(msg, { isSelected, isHovered, isTranslated, transitionProgress }) {
+    drawSpiral(msg, { isSelected, isHovered, isAncestor = false, isTranslated, transitionProgress }) {
         const ctx = this.ctx;
         const { bezierPath, points, scale } = msg.spiralData;
 
@@ -1067,7 +1072,7 @@ class NomaiCanvas {
         ctx.restore();
 
         // Draw stronger glow effect for selected/hovered
-        if (isSelected || isHovered) {
+        if (isSelected || isHovered || isAncestor) {
             ctx.save();
             ctx.shadowColor = glowColor;
             ctx.shadowBlur = isSelected ? 20 : 12;
@@ -1171,6 +1176,13 @@ class NomaiCanvas {
      */
     setSelected(id) {
         this.selectedId = id;
+        this.selectedPath = new Set();
+        const byId = new Map(this.messages.map(m => [m.id, m]));
+        let message = byId.get(id);
+        while (message && !this.selectedPath.has(message.id)) {
+            this.selectedPath.add(message.id);
+            message = byId.get(message.parent_id);
+        }
         this.render();
     }
 
@@ -1252,6 +1264,8 @@ class NomaiCanvas {
      * Clear all translated messages (when switching threads).
      */
     clearTranslated() {
+        this.cancelAnimation();
+        this.selectedPath.clear();
         this.translatedIds.clear();
         this.transitionProgress.clear();
         this.pauseTransition();

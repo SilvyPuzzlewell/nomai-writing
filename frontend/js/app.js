@@ -43,6 +43,14 @@ class NomaiApp {
         this.interaction = null;
         this.currentThreadId = null;
         this.selectedMessage = null;
+        this.threadLoadGeneration = 0;
+        this.threadListGeneration = 0;
+        this.loadingThreadId = null;
+        this.foregroundLoading = false;
+        this.pendingTranslations = new Map();
+        this.translationSaves = new Map();
+        this.composerVersion = 0;
+        this.threads = [];
 
         // Drawing mode state
         this.drawnSpiralParams = null; // Stores { branchT, curvatureDir, curvatureTightness, startAngle }
@@ -87,6 +95,16 @@ class NomaiApp {
             onSnap: () => this.syncCanvasInsets()
         });
         this.syncCanvasInsets();
+        this.outline = new ConversationOutline(document.getElementById('outline-list'), id => {
+            const message = this.canvas.getMessage(id);
+            if (message && !this.foregroundLoading) this.handleMessageSelect(message);
+        });
+        this.canvas.onVisibilityChange = () => this.updateConversation();
+        const outlineDetails = document.getElementById('conversation-outline');
+        outlineDetails.open = !this.sheet.enabled;
+        outlineDetails.addEventListener('toggle', () => {
+            if (outlineDetails.open && this.sheet.enabled) this.sheet.snapTo(BottomSheet.FULL);
+        });
 
         // Bind UI events
         this.bindUIEvents();
@@ -116,6 +134,11 @@ class NomaiApp {
         // Start polling for friend request badge
         this.updateFriendBadge();
         this.badgeInterval = setInterval(() => this.updateFriendBadge(), 30000);
+        this.refreshInterval = setInterval(() => this.refreshThreads(), 15000);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) this.refreshThreads();
+        });
+        window.addEventListener('online', () => this.refreshThreads());
 
         // Re-render once the heading webfont is ready (canvas text uses it)
         if (document.fonts && document.fonts.ready) {
@@ -144,6 +167,13 @@ class NomaiApp {
      */
     bindUIEvents() {
         this.bindHeaderMenu();
+        document.getElementById('write-message-btn').addEventListener('click', () => this.showMessageModal());
+        document.getElementById('reply-message-btn').addEventListener('click', () => {
+            if (this.selectedMessage) this.showMessageModal(this.selectedMessage);
+        });
+        document.getElementById('translate-message-btn').addEventListener('click', () => {
+            if (this.selectedMessage && !this.foregroundLoading) this.handleMouseDown(this.selectedMessage);
+        });
 
         // Thread selector
         document.getElementById('thread-selector').addEventListener('change', (e) => {
@@ -228,9 +258,8 @@ class NomaiApp {
             this.handleCollisionAllow();
         });
 
-        document.getElementById('collision-adjust-btn').addEventListener('click', () => {
-            this.hideCollisionModal();
-        });
+        document.getElementById('collision-adjust-btn').addEventListener('click', () => this.finishCollisionChoice('adjust'));
+        document.getElementById('collision-cancel-btn').addEventListener('click', () => this.hideCollisionModal());
 
         document.getElementById('collision-modal').addEventListener('click', (e) => {
             if (e.target.id === 'collision-modal') this.hideCollisionModal();
@@ -567,126 +596,182 @@ class NomaiApp {
     /**
      * Load all threads into selector.
      */
-    async loadThreads() {
+    async loadThreads({ quiet = false } = {}) {
+        const generation = ++this.threadListGeneration;
         try {
             const threads = await api.getThreads();
-            const selector = document.getElementById('thread-selector');
-
-            // Keep first option
-            selector.innerHTML = '<option value="">Select a thread...</option>';
-
-            threads.forEach(thread => {
-                const option = document.createElement('option');
-                option.value = thread.id;
-                option.textContent = `${thread.title} (${thread.message_count} messages)`;
-                selector.appendChild(option);
-            });
-
-            // If we had a thread selected, re-select it
-            if (this.currentThreadId) {
-                selector.value = this.currentThreadId;
-            }
+            if (generation !== this.threadListGeneration) return;
+            this.threads = threads;
+            this.renderThreadOptions();
         } catch (err) {
-            console.error('Failed to load threads:', err);
-            toast.error(err.message);
+            if (!quiet) toast.error(err.message);
         }
     }
 
-    /**
-     * Load a specific thread with progressive reveal.
-     * Only root messages shown initially; children appear when parents are translated.
-     */
-    async loadThread(threadId) {
-        try {
-            // Fetched together: progressive reveal needs the translated set
-            // before it can decide which children start visible, and this way
-            // it costs one round trip rather than two.
-            const [thread, progress] = await Promise.all([
-                api.getThread(threadId),
-                this.fetchTranslationProgress(threadId)
-            ]);
-
-            // Reloading the same thread (e.g. after adding a message) keeps the camera still
-            const sameThread = this.currentThreadId === threadId;
-
-            this.currentThreadCreatedAt = thread.created_at;
-
-            // Only clear translation state when switching to a different thread
-            if (!sameThread) {
-                this.canvas.clearTranslated();
-                this.restoreTranslationState(thread, progress);
+    renderThreadOptions() {
+        const selector = document.getElementById('thread-selector');
+        const selected = this.loadingThreadId || this.currentThreadId || '';
+        const fragment = document.createDocumentFragment();
+        const empty = document.createElement('option');
+        empty.value = '';
+        empty.textContent = 'Select a thread...';
+        fragment.append(empty);
+        for (const thread of this.threads) {
+            const option = document.createElement('option');
+            option.value = thread.id;
+            let unread = thread.unread_count || 0;
+            if (thread.id === this.currentThreadId) {
+                unread = this.canvas.messages.filter(m => !this.canvas.translatedIds.has(m.id)).length;
             }
+            option.textContent = `${thread.title} (${thread.message_count} messages${unread ? ` · ${unread} unread` : ''})`;
+            fragment.append(option);
+        }
+        selector.replaceChildren(fragment);
+        selector.value = selected;
+    }
+
+    isInteracting() {
+        return this.interaction.isDrawing() || this.interaction.isMouseDown ||
+            !!this.canvas.activeTransition || this.canvas.revealTimers.size > 0 ||
+            this.canvas.drawAnimations.size > 0 || !!document.querySelector('.modal:not(.hidden)');
+    }
+
+    async refreshThreads() {
+        if (document.hidden || this.pollInFlight) return;
+        this.pollInFlight = true;
+        try {
+            await Promise.all([...this.pendingTranslations.keys()].map(id => this.flushTranslations(id)));
+            await this.loadThreads({ quiet: true });
+            if (this.currentThreadId && !this.loadingThreadId && !this.isInteracting()) {
+                await this.loadThread(this.currentThreadId, { background: true });
+            }
+        } finally {
+            this.pollInFlight = false;
+        }
+    }
+
+    /** Fetch everything before committing any state; a newer request always wins. */
+    async loadThread(threadId, { background = false } = {}) {
+        if (background && (this.loadingThreadId || this.isInteracting() || this.currentThreadId !== threadId)) return false;
+        if (!background) {
+            this.stopTranslation();
+            this.interaction.cancelDrawing();
+            if (this.currentThreadId !== threadId) this.clearBoard();
+        }
+        const generation = ++this.threadLoadGeneration;
+        this.loadingThreadId = threadId;
+        this.foregroundLoading = !background;
+        document.getElementById('canvas-container').setAttribute('aria-busy', String(!background));
+        document.getElementById('thread-selector').value = threadId;
+        try {
+            const [thread, progress, collaborators] = await Promise.all([
+                api.getThread(threadId), this.fetchTranslationProgress(threadId),
+                api.getThreadCollaborators(threadId).catch(() => null)
+            ]);
+            if (generation !== this.threadLoadGeneration || (background && this.isInteracting())) return false;
+            const sameThread = this.currentThreadId === threadId;
+            const snapshot = JSON.stringify(thread);
+            if (background && snapshot === this.threadSnapshot &&
+                progress.ids.every(id => this.canvas.translatedIds.has(id)) &&
+                !this.readLegacyTranslations(thread).entries.length) {
+                this.updateThreadPermissions(collaborators);
+                const status = document.getElementById('thread-updates');
+                if (status.textContent.startsWith('Could not refresh')) status.textContent = '';
+                return true;
+            }
+            const oldIds = new Set(sameThread ? this.canvas.messages.map(m => m.id) : []);
+            const selectedId = sameThread ? this.selectedMessage?.id : null;
+            if (!sameThread) this.canvas.clearTranslated();
+            this.restoreTranslationState(thread, progress, sameThread);
             this.currentThreadId = threadId;
             this.currentThreadOwnerId = thread.user_id;
-            const isOwner = this.currentUserId === this.currentThreadOwnerId;
-
-            // Show collaborators button when a thread is selected
-            document.getElementById('collaborators-btn').classList.remove('hidden');
-            document.getElementById('clear-thread-btn').classList.toggle('hidden', !isOwner);
-
-            // Notify button is active only when the thread is shared with someone
-            try {
-                const collabs = await api.getThreadCollaborators(threadId);
-                document.getElementById('notify-btn').classList.toggle('hidden', collabs.length === 0);
-            } catch (err) {
-                document.getElementById('notify-btn').classList.add('hidden');
+            this.currentThreadCreatedAt = thread.created_at;
+            this.threadSnapshot = snapshot;
+            this.updateThreadPermissions(collaborators);
+            this.canvas.setMessagesProgressiveReveal(thread.messages,
+                layouts => {
+                    this.saveLayouts(threadId, layouts);
+                    this.checkForCollisionConflicts();
+                },
+                id => this.saveTranslation(id, threadId), sameThread);
+            const selected = this.canvas.getMessage(selectedId);
+            if (selected && this.canvas.visibleMessageIds.has(selected.id)) this.handleMessageSelect(selected);
+            else this.clearSelection();
+            if (background) {
+                const added = thread.messages.filter(m => !oldIds.has(m.id)).length;
+                if (added) document.getElementById('thread-updates').textContent =
+                    `${added} new ${added === 1 ? 'message' : 'messages'}. Translate the conversation to uncover replies.`;
             }
-
-            // Use progressive reveal - only roots visible initially
-            this.canvas.setMessagesProgressiveReveal(thread.messages, (layouts) => {
-                this.saveLayouts(threadId, layouts);
-                this.checkForCollisionConflicts();
-            }, (messageId) => {
-                // Called when a message finishes translating
-                this.saveTranslation(messageId);
-            }, sameThread);
-
-            this.clearSelection();
+            this.updateConversation();
+            this.renderThreadOptions();
+            return true;
         } catch (err) {
-            console.error('Failed to load thread:', err);
-            toast.error(err.message);
+            if (generation === this.threadLoadGeneration) {
+                if (err.status === 403 || err.status === 404) {
+                    this.clearBoard();
+                    document.getElementById('thread-updates').textContent = 'This thread is no longer available.';
+                } else if (background) document.getElementById('thread-updates').textContent = 'Could not refresh. Retrying automatically.';
+                else toast.error(err.message);
+            }
+            return false;
+        } finally {
+            if (generation === this.threadLoadGeneration) {
+                this.loadingThreadId = null;
+                this.foregroundLoading = false;
+                document.getElementById('canvas-container').setAttribute('aria-busy', 'false');
+                document.getElementById('thread-selector').value = this.currentThreadId || '';
+            }
         }
     }
 
-    /**
-     * Check for collision conflicts after layout and show warning if needed.
-     */
+    updateThreadPermissions(collaborators) {
+        const active = !!this.currentThreadId;
+        const owner = active && this.currentUserId === this.currentThreadOwnerId;
+        for (const id of ['clear-thread-btn', 'regenerate-btn']) {
+            document.getElementById(id).classList.toggle('hidden', !owner);
+        }
+        for (const id of ['collaborators-btn', 'write-message-btn', 'conversation-outline']) {
+            document.getElementById(id).classList.toggle('hidden', !active);
+        }
+        if (collaborators !== null) document.getElementById('notify-btn').classList.toggle('hidden', !active || !collaborators?.length);
+    }
+
+    updateConversation() {
+        if (this.outline) this.outline.render(this.canvas);
+        const unread = this.canvas.messages.filter(m => !this.canvas.translatedIds.has(m.id)).length;
+        document.getElementById('thread-unread-count').textContent = unread ? `${unread} unread` : 'All translated';
+        this.updateReadingActions();
+    }
+
+    updateReadingActions() {
+        const message = this.selectedMessage;
+        document.getElementById('reading-actions').classList.toggle('hidden', !message);
+        const button = document.getElementById('translate-message-btn');
+        const complete = message && this.canvas.translatedIds.has(message.id);
+        button.disabled = !message || complete;
+        button.textContent = complete ? 'Translated' :
+            (message && this.canvas.isTransitionRunning(message.id) ? 'Pause' : 'Translate');
+    }
+
     checkForCollisionConflicts() {
         const conflicts = this.canvas.getCollisionConflicts();
-        if (conflicts.length > 0) {
-            this.pendingCollisionConflicts = conflicts;
-            this.showCollisionModal();
-        }
+        if (conflicts.length) toast.info('Adjusted spiral placement to avoid overlap where possible.');
     }
 
-    /**
-     * Show collision warning modal.
-     */
     showCollisionModal() {
         this.openModal(document.getElementById('collision-modal'));
+        return new Promise(resolve => { this.resolveCollision = resolve; });
     }
 
-    /**
-     * Hide collision warning modal.
-     */
-    hideCollisionModal() {
+    finishCollisionChoice(choice) {
+        const resolve = this.resolveCollision;
+        this.resolveCollision = null;
         this.closeModal(document.getElementById('collision-modal'));
-        this.pendingCollisionConflicts = null;
+        if (resolve) resolve(choice);
     }
 
-    /**
-     * Handle user choosing to allow overlap.
-     */
-    handleCollisionAllow() {
-        // For now, just hide the modal - allowing overlap would require
-        // re-rendering without collision avoidance, which is a more complex feature
-        this.hideCollisionModal();
-        // Future enhancement: store allowOverlap flag and re-render
-    }
-
-    // =========================================================================
-    // Drawing Mode Handlers (Canvas-first workflow)
-    // =========================================================================
+    hideCollisionModal() { this.finishCollisionChoice(null); }
+    handleCollisionAllow() { this.finishCollisionChoice('allow'); }
 
     /**
      * Handle branch point moving along spiral (during selection).
@@ -809,7 +894,7 @@ class NomaiApp {
     /**
      * Handle spiral confirmed - open modal with parameters.
      */
-    handleSpiralConfirm(data) {
+    async handleSpiralConfirm(data) {
         if (!data.branchPoint) {
             // No branch point - cancel
             this.handleDrawingCancel();
@@ -830,6 +915,20 @@ class NomaiApp {
             userDrawn: true
         };
 
+        const threadId = this.currentThreadId;
+        const generation = this.threadLoadGeneration;
+        const existing = this.canvas.messages.filter(m => m.spiralData)
+            .map(m => ({ points: m.spiralData.points, nodeId: m.id }));
+        if (this.canvas.previewSpiral && checkSpiralIntersection(this.canvas.previewSpiral.points, existing, 3, data.parentMessage.id)) {
+            this.syncDrawingControls(false);
+            const choice = await this.showCollisionModal();
+            if (!choice || this.currentThreadId !== threadId || this.threadLoadGeneration !== generation) {
+                this.handleDrawingCancel();
+                return;
+            }
+            this.drawnSpiralParams.allowOverlap = choice === 'allow';
+            this.drawnSpiralParams.autoAdjust = choice === 'adjust';
+        }
         // Set parent message for the modal
         this.selectedMessage = data.parentMessage;
 
@@ -866,6 +965,9 @@ class NomaiApp {
             return;
         }
 
+        this.composerVersion++;
+        this.composerThreadId = this.currentThreadId;
+        document.getElementById('message-modal-title').textContent = 'Write a reply';
         this.openModal(document.getElementById('message-modal'));
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
@@ -977,6 +1079,12 @@ class NomaiApp {
      * Clear the board.
      */
     clearBoard() {
+        this.threadLoadGeneration++;
+        this.loadingThreadId = null;
+        this.foregroundLoading = false;
+        this.stopTranslation();
+        this.interaction.cancelDrawing();
+        this.threadSnapshot = null;
         this.currentThreadId = null;
         this.currentThreadOwnerId = null;
         this.canvas.clearTranslated();
@@ -986,22 +1094,27 @@ class NomaiApp {
         document.getElementById('collaborators-btn').classList.add('hidden');
         document.getElementById('notify-btn').classList.add('hidden');
         document.getElementById('clear-thread-btn').classList.add('hidden');
+        document.getElementById('thread-updates').textContent = '';
+        document.getElementById('canvas-container').setAttribute('aria-busy', 'false');
+        this.updateThreadPermissions([]);
+        this.updateConversation();
     }
 
     /**
      * Handle clear board button.
      */
     async handleClearBoard() {
-        if (!this.currentThreadId) return;
+        if (!this.currentThreadId || this.foregroundLoading) return;
 
+        const threadId = this.currentThreadId;
         const ok = await this.confirmDialog(
             'This deletes the thread and every message in it. This cannot be undone.',
             { title: 'Delete thread', confirmLabel: 'Delete thread' }
         );
-        if (ok) {
+        if (ok && this.currentThreadId === threadId) {
             try {
-                await api.deleteThread(this.currentThreadId);
-                this.clearBoard();
+                await api.deleteThread(threadId);
+                if (this.currentThreadId === threadId) this.clearBoard();
                 await this.loadThreads();
                 toast.success('Thread deleted.');
             } catch (err) {
@@ -1015,11 +1128,12 @@ class NomaiApp {
      * Handle regenerate layout button.
      */
     async handleRegenerateLayout() {
-        if (!this.currentThreadId) return;
-
+        if (!this.currentThreadId || this.foregroundLoading) return;
+        const threadId = this.currentThreadId;
         try {
             // Clear saved layouts on server
-            await api.clearLayouts(this.currentThreadId);
+            await api.clearLayouts(threadId);
+            if (this.currentThreadId !== threadId) return;
             // Clear cached layouts so regeneration computes fresh
             this.canvas.clearLayoutCache();
             // Reload thread (will regenerate and save new layouts)
@@ -1074,6 +1188,7 @@ class NomaiApp {
 
             if (!data.title) {
                 toast.error('Invalid file: missing thread title');
+                event.target.value = '';
                 return;
             }
 
@@ -1128,6 +1243,7 @@ class NomaiApp {
         }
 
         this.selectedMessage = message;
+        this.canvas.setSelected(message ? message.id : null);
         // Show current translation state (don't animate - wait for mouse down)
         this.updateTranslationPanel(message);
         // Show/hide delete button
@@ -1143,24 +1259,26 @@ class NomaiApp {
             if (message) this.sheet.reveal();
             else this.sheet.collapse();
         }
+        this.updateConversation();
     }
 
     /**
      * Handle delete message button.
      */
     async handleDeleteMessage() {
-        if (!this.selectedMessage) return;
-
+        if (!this.selectedMessage || this.foregroundLoading) return;
+        const threadId = this.currentThreadId;
         const msg = this.selectedMessage;
         const ok = await this.confirmDialog(
             `Delete ${msg.writer_name}'s message? Every reply beneath it goes too.`,
             { title: 'Delete message', confirmLabel: 'Delete' }
         );
-        if (ok) {
+        if (ok && this.currentThreadId === threadId) {
             try {
                 await api.deleteMessage(msg.id);
+                if (this.currentThreadId !== threadId) return;
                 this.clearSelection();
-                await this.loadThread(this.currentThreadId);
+                await this.loadThread(threadId);
                 await this.loadThreads();
             } catch (err) {
                 console.error('Failed to delete message:', err);
@@ -1190,7 +1308,7 @@ class NomaiApp {
      * Handle mouse down - start translation.
      */
     handleMouseDown(message) {
-        if (!message) return;
+        if (!message || this.foregroundLoading) return;
 
         // A latched translation is already running unattended - pressing it
         // again is how you pause it.
@@ -1209,6 +1327,7 @@ class NomaiApp {
         this.startTextAnimation(message, startProgress);
 
         if (startProgress < 1) haptic(8);
+        this.updateReadingActions();
     }
 
     /**
@@ -1229,16 +1348,19 @@ class NomaiApp {
     stopTranslation() {
         this.canvas.pauseTransition();
         this.pauseTextAnimation();
+        this.updateReadingActions();
     }
 
     /**
      * Clear selection.
      */
     clearSelection() {
+        this.stopTranslation();
         this.selectedMessage = null;
         this.canvas.setSelected(null);
         this.updateTranslationPanel(null);
         document.getElementById('delete-message-btn').classList.add('hidden');
+        this.updateConversation();
     }
 
     /**
@@ -1288,6 +1410,7 @@ class NomaiApp {
                 this.animatingMessageId = null;
                 contentEl.classList.remove('translating');
                 haptic([12, 40, 12]);
+                this.updateConversation();
             }
         };
 
@@ -1459,8 +1582,7 @@ class NomaiApp {
             this.hideThreadModal();
             await this.loadThreads();
             document.getElementById('thread-selector').value = thread.id;
-            await this.loadThread(thread.id);
-            this.showMessageModal(); // prompt for root message
+            if (await this.loadThread(thread.id)) this.showMessageModal();
         } catch (err) {
             console.error('Failed to create thread:', err);
             toast.error(err.message);
@@ -1470,12 +1592,18 @@ class NomaiApp {
     /**
      * Show message creation modal (for + button, no pre-drawn spiral).
      */
-    showMessageModal() {
-        if (!this.currentThreadId) {
+    showMessageModal(parent = null) {
+        if (!this.currentThreadId || this.foregroundLoading) {
             toast.info('Select or create a thread first.');
             return;
         }
 
+        this.stopTranslation();
+        this.interaction.cancelDrawing();
+        this.handleMessageSelect(parent);
+        this.composerVersion++;
+        this.composerThreadId = this.currentThreadId;
+        document.getElementById('message-modal-title').textContent = parent ? 'Write a reply' : 'Write a message';
         this.openModal(document.getElementById('message-modal'));
         document.getElementById('content-input').value = '';
         document.getElementById('content-input').focus();
@@ -1488,6 +1616,7 @@ class NomaiApp {
      * Hide message creation modal.
      */
     hideMessageModal() {
+        this.composerVersion++;
         this.closeModal(document.getElementById('message-modal'));
 
         // Clear preview if any
@@ -1500,33 +1629,33 @@ class NomaiApp {
      * Handle message creation.
      */
     async handleCreateMessage() {
+        if (this.submittingMessage) return;
+        const threadId = this.composerThreadId;
+        const version = this.composerVersion;
+        if (!threadId || threadId !== this.currentThreadId || this.foregroundLoading) return;
         const writerName = document.getElementById('current-username').textContent.trim();
         const content = document.getElementById('content-input').value.trim();
-
-        if (!content) {
-            toast.info('Enter a message first.');
-            return;
-        }
-
+        if (!content) { toast.info('Enter a message first.'); return; }
         const parentId = this.selectedMessage ? this.selectedMessage.id : null;
         const spiralPrefs = this.collectSpiralPreferences();
-
+        this.submittingMessage = true;
+        const button = document.getElementById('add-message-btn');
+        button.disabled = true;
         try {
-            const newMessage = await api.createMessage(this.currentThreadId, parentId, writerName, content, spiralPrefs);
-            this.hideMessageModal();
-            this.clearParentSelection();
-
-            // Mark the new message as already translated (you wrote it, so you know what it says)
-            this.canvas.markTranslated(newMessage.id);
-            this.saveTranslation(newMessage.id);
-
-            await this.loadThread(this.currentThreadId);
-
-            // Refresh the selector so the message count stays accurate
+            const newMessage = await api.createMessage(threadId, parentId, writerName, content, spiralPrefs);
+            this.saveTranslation(newMessage.id, threadId);
+            if (this.currentThreadId === threadId && version === this.composerVersion) {
+                this.hideMessageModal();
+                this.clearParentSelection();
+                this.canvas.markTranslated(newMessage.id);
+                await this.loadThread(threadId);
+            }
             await this.loadThreads();
         } catch (err) {
-            console.error('Failed to create message:', err);
             toast.error(err.message);
+        } finally {
+            this.submittingMessage = false;
+            button.disabled = false;
         }
     }
 
@@ -1536,6 +1665,7 @@ class NomaiApp {
 
     async handleLogout() {
         if (this.badgeInterval) clearInterval(this.badgeInterval);
+        if (this.refreshInterval) clearInterval(this.refreshInterval);
         await api.logout();
         window.location.href = '/login';
     }
@@ -1880,73 +2010,72 @@ class NomaiApp {
      * retry re-sends the whole known set, so one dropped request on a flaky
      * connection doesn't quietly cost the user their progress.
      */
-    saveTranslation(messageId) {
-        const threadId = this.currentThreadId;
+    saveTranslation(messageId, threadId = this.currentThreadId) {
         if (!threadId || !messageId) return;
-
-        api.saveTranslations(threadId, [messageId]).catch(() => {
-            setTimeout(() => {
-                if (this.currentThreadId !== threadId) return;
-                api.saveTranslations(threadId, this.canvas.getTranslatedIds())
-                    .catch((err) => console.error('Failed to save translation progress:', err));
-            }, 3000);
-        });
+        if (!this.pendingTranslations.has(threadId)) this.pendingTranslations.set(threadId, new Set());
+        this.pendingTranslations.get(threadId).add(messageId);
+        this.flushTranslations(threadId);
+        if (threadId === this.currentThreadId) {
+            this.updateConversation();
+            this.renderThreadOptions();
+        }
     }
 
-    /**
-     * Apply saved progress to the canvas, folding in anything still sitting in
-     * localStorage from before this moved server-side.
-     * @param {Object} thread - Thread from the API (with messages)
-     * @param {{ok: boolean, ids: number[]}} progress
-     */
-    restoreTranslationState(thread, progress) {
-        // Only ids that belong to this thread - a stale local entry could
-        // otherwise name a message from a different (or deleted) thread
+    async flushTranslations(threadId) {
+        if (this.translationSaves.has(threadId)) return this.translationSaves.get(threadId);
+        const ids = [...(this.pendingTranslations.get(threadId) || [])];
+        if (!ids.length) return;
+        const saving = api.saveTranslations(threadId, ids).then(() => {
+            const pending = this.pendingTranslations.get(threadId);
+            ids.forEach(id => pending?.delete(id));
+            if (!pending?.size) this.pendingTranslations.delete(threadId);
+        }).catch(err => console.error('Translation save will retry:', err))
+            .finally(() => this.translationSaves.delete(threadId));
+        this.translationSaves.set(threadId, saving);
+        return saving;
+    }
+
+    restoreTranslationState(thread, progress, preserveLocal = false) {
         const valid = new Set((thread.messages || []).map(m => m.id));
-        const ids = new Set(progress.ids.filter(id => valid.has(id)));
-
-        // Don't consume the local copy if the server read failed - it is the
-        // only record of that progress until an upload succeeds
-        if (progress.ok) {
-            const migrated = this.takeLegacyTranslations(thread)
-                .filter(id => valid.has(id) && !ids.has(id));
-
-            if (migrated.length > 0) {
-                migrated.forEach(id => ids.add(id));
-                api.saveTranslations(thread.id, migrated)
-                    .catch((err) => console.error('Failed to migrate translation progress:', err));
-            }
+        const local = preserveLocal ? this.canvas.getTranslatedIds() : [];
+        const pending = [...(this.pendingTranslations.get(thread.id) || [])];
+        const ids = new Set([...progress.ids, ...local, ...pending].filter(id => valid.has(id)));
+        const legacy = this.readLegacyTranslations(thread);
+        legacy.ids.filter(id => valid.has(id)).forEach(id => ids.add(id));
+        // Keep the original local copy until the server confirms the upload.
+        if (progress.ok && legacy.entries.length) {
+            const migrated = legacy.ids.filter(id => valid.has(id));
+            api.saveTranslations(thread.id, migrated).then(() => {
+                for (const [key, value] of legacy.entries) {
+                    try {
+                        if (localStorage.getItem(key) === value) localStorage.removeItem(key);
+                    } catch (err) { /* Storage can be unavailable in private browsing. */ }
+                }
+            }).catch(err => console.error('Legacy progress retained for retry:', err));
         }
-
+        for (const id of this.canvas.translatedIds) {
+            if (!valid.has(id)) this.canvas.translatedIds.delete(id);
+        }
         this.canvas.restoreTranslated([...ids]);
     }
 
-    /**
-     * Read and clear this browser's pre-server translation state for a thread.
-     * Keys were `nomai_translated_<threadId>_<createdAt>`, with an older
-     * variant that omitted created_at.
-     * @returns {number[]}
-     */
-    takeLegacyTranslations(thread) {
-        const keys = [
-            `nomai_translated_${thread.id}_${thread.created_at || ''}`,
-            `nomai_translated_${thread.id}`
-        ];
-
-        const ids = [];
+    readLegacyTranslations(thread) {
+        const keys = [`nomai_translated_${thread.id}_${thread.created_at || ''}`, `nomai_translated_${thread.id}`];
+        const ids = [], entries = [];
         for (const key of keys) {
-            const stored = localStorage.getItem(key);
-            localStorage.removeItem(key);
-            if (!stored) continue;
             try {
-                const parsed = JSON.parse(stored);
-                if (Array.isArray(parsed)) ids.push(...parsed.filter(Number.isInteger));
-            } catch (e) {
-                // Unparseable leftover - dropping it is the right outcome
-            }
+                const value = localStorage.getItem(key);
+                if (!value) continue;
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed)) {
+                    ids.push(...parsed.filter(Number.isInteger));
+                    entries.push([key, value]);
+                }
+            } catch (err) { /* Invalid or inaccessible legacy data must not block reading. */ }
         }
-        return ids;
+        return { ids, entries };
     }
+
 }
 
 // Initialize app when DOM is ready

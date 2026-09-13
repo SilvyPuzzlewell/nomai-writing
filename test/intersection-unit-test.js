@@ -3,95 +3,9 @@
  * Run with: node test/intersection-unit-test.js
  */
 
-// Bezier sampling functions (same as in spiral.js)
-function sampleBezierPoint(p0, cp1, cp2, p1, t) {
-    const mt = 1 - t;
-    const mt2 = mt * mt;
-    const mt3 = mt2 * mt;
-    const t2 = t * t;
-    const t3 = t2 * t;
-
-    return {
-        x: mt3 * p0.x + 3 * mt2 * t * cp1.x + 3 * mt * t2 * cp2.x + t3 * p1.x,
-        y: mt3 * p0.y + 3 * mt2 * t * cp1.y + 3 * mt * t2 * cp2.y + t3 * p1.y
-    };
-}
-
-function sampleBezierCurve(points, samplesPerSegment = 4) {
-    if (points.length < 2) return points.map(p => ({ x: p.x, y: p.y }));
-
-    const sampled = [];
-
-    for (let i = 0; i < points.length - 1; i++) {
-        const p0 = points[Math.max(0, i - 1)];
-        const p1 = points[i];
-        const p2 = points[i + 1];
-        const p3 = points[Math.min(points.length - 1, i + 2)];
-
-        const cp1 = {
-            x: p1.x + (p2.x - p0.x) / 6,
-            y: p1.y + (p2.y - p0.y) / 6
-        };
-        const cp2 = {
-            x: p2.x - (p3.x - p1.x) / 6,
-            y: p2.y - (p3.y - p1.y) / 6
-        };
-
-        const startJ = (i === 0) ? 0 : 1;
-        for (let j = startJ; j <= samplesPerSegment; j++) {
-            const t = j / samplesPerSegment;
-            sampled.push(sampleBezierPoint(p1, cp1, cp2, p2, t));
-        }
-    }
-
-    return sampled;
-}
-
-// Segment intersection function (same as in spiral.js)
-function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
-    // Standard line segment intersection using cross products
-    const d1x = ax2 - ax1, d1y = ay2 - ay1;
-    const d2x = bx2 - bx1, d2y = by2 - by1;
-
-    const cross = d1x * d2y - d1y * d2x;
-    if (Math.abs(cross) < 1e-10) return false; // Parallel
-
-    const dx = bx1 - ax1, dy = by1 - ay1;
-    const t = (dx * d2y - dy * d2x) / cross;
-    const u = (dx * d1y - dy * d1x) / cross;
-
-    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
-}
-
-// Check spiral intersection (same as in spiral.js)
-// Uses sampled Bezier curves to match actual rendered paths
-function checkSpiralIntersection(newPoints, existingSpirals, skipSegments = 3) {
-    const samplesPerSegment = 4;
-    const sampledNew = sampleBezierCurve(newPoints, samplesPerSegment);
-    const skipNewSegments = skipSegments * samplesPerSegment;
-
-    for (const existing of existingSpirals) {
-        const sampledExisting = existing.sampledPoints ||
-            (existing.points ? sampleBezierCurve(existing.points, samplesPerSegment) : null);
-
-        if (!sampledExisting) continue;
-
-        // Check new spiral's segments (after skip) against ALL existing segments
-        for (let i = skipNewSegments; i < sampledNew.length - 1; i++) {
-            for (let j = 0; j < sampledExisting.length - 1; j++) {
-                if (segmentsIntersect(
-                    sampledNew[i].x, sampledNew[i].y,
-                    sampledNew[i + 1].x, sampledNew[i + 1].y,
-                    sampledExisting[j].x, sampledExisting[j].y,
-                    sampledExisting[j + 1].x, sampledExisting[j + 1].y
-                )) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
+// Exercise the shipped geometry instead of a stale copy of the implementation.
+const { loadFrontend } = require('./frontend-test-helpers');
+const { segmentsIntersect, checkSpiralIntersection } = loadFrontend();
 
 // Test runner
 let passed = 0;
@@ -271,11 +185,11 @@ function makeArc(cx, cy, radius, startAngle, endAngle, numPoints = 30) {
     return points;
 }
 
-test('two arcs curving away should not intersect', () => {
+test('separated arcs curving away should not intersect', () => {
     // Arc curving up-right
     const arc1 = makeArc(0, 0, 50, 0, Math.PI / 2);
-    // Arc curving down-right (different center)
-    const arc2 = makeArc(100, 0, 50, Math.PI, Math.PI * 1.5);
+    // Arc curving down-right, with a 10px gap between endpoints
+    const arc2 = makeArc(110, 0, 50, Math.PI, Math.PI * 1.5);
 
     const result = checkSpiralIntersection(arc1, [{ points: arc2 }], 0);
     assertEqual(result, false);

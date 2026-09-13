@@ -2,12 +2,15 @@ import os
 import json
 import logging
 import sqlite3
+import secrets
+import click
 import urllib.request
 import urllib.error
 from functools import wraps
 from flask import Flask, jsonify, request, send_from_directory, session, redirect
 from flask_cors import CORS
 import database
+from validation import positive_id, valid_discord_webhook
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -18,7 +21,14 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BACKEND_DIR, '..', 'frontend')
 
 app = Flask(__name__, static_folder=FRONTEND_DIR)
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+session_key = os.environ.get('SECRET_KEY', '').strip()
+if not session_key or session_key in ('dev-secret-key-change-in-production', 'your-secret-key-here'):
+    if __name__ != '__main__':
+        raise RuntimeError('Set a private SECRET_KEY before starting the server')
+    # The direct Python entrypoint is local development only. Never use a
+    # predictable signing key, even locally; restart signs the user out.
+    session_key = secrets.token_hex(32)
+app.secret_key = session_key
 CORS(app)
 
 # Log database configuration
@@ -155,9 +165,6 @@ def register():
     session['user_id'] = user['id']
     session['username'] = user['username']
 
-    # Claim orphan threads (one-time migration for existing data)
-    database.claim_orphan_threads(user['id'])
-
     return jsonify({'id': user['id'], 'username': user['username']}), 201
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -200,9 +207,11 @@ def get_me():
 def set_discord_webhook():
     """Set or clear the current user's personal Discord webhook URL."""
     data = request.get_json() or {}
-    webhook = (data.get('webhook') or '').strip()
+    if not isinstance(data, dict) or not isinstance(data.get('webhook', ''), str):
+        return jsonify({'error': 'webhook must be text'}), 400
+    webhook = data.get('webhook', '').strip()
 
-    if webhook and not (webhook.startswith('https://') and 'discord' in webhook):
+    if webhook and not valid_discord_webhook(webhook):
         return jsonify({'error': 'Enter a valid Discord webhook URL'}), 400
 
     database.set_user_discord_webhook(get_current_user(), webhook)
@@ -241,8 +250,10 @@ def get_thread(thread_id):
 def create_thread():
     """Create a new thread, optionally sharing with friends."""
     data = request.get_json()
-    if not data or 'title' not in data:
+    if not isinstance(data, dict) or not isinstance(data.get('title'), str) or not data['title'].strip():
         return jsonify({'error': 'Title is required'}), 400
+    if not isinstance(data.get('friend_ids', []), list) or not all(positive_id(fid) for fid in data.get('friend_ids', [])):
+        return jsonify({'error': 'friend_ids must contain user IDs'}), 400
 
     user_id = get_current_user()
     thread = database.create_thread(data['title'], user_id)
@@ -279,6 +290,8 @@ def create_message():
     if not data:
         return jsonify({'error': 'Request body is required'}), 400
 
+    if not isinstance(data, dict) or not positive_id(data.get('thread_id')):
+        return jsonify({'error': 'A valid thread_id is required'}), 400
     required = ['thread_id', 'writer_name', 'content']
     for field in required:
         if field not in data:
@@ -289,13 +302,16 @@ def create_message():
     if not allowed:
         return jsonify({'error': 'Access denied'}), 403
 
-    message = database.create_message(
-        thread_id=data['thread_id'],
-        parent_id=data.get('parent_id'),
-        writer_name=data['writer_name'],
-        content=data['content'],
-        spiral_prefs=data.get('spiral_prefs')
-    )
+    try:
+        message = database.create_message(
+            thread_id=data['thread_id'],
+            parent_id=data.get('parent_id'),
+            writer_name=data['writer_name'],
+            content=data['content'],
+            spiral_prefs=data.get('spiral_prefs')
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     return jsonify(message), 201
 
 @app.route('/api/messages/<int:message_id>', methods=['DELETE'])
@@ -329,7 +345,10 @@ def update_layouts(thread_id):
     if not data or 'layouts' not in data:
         return jsonify({'error': 'layouts object is required'}), 400
 
-    database.update_thread_layouts(thread_id, data['layouts'])
+    try:
+        database.update_thread_layouts(thread_id, data['layouts'])
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     return jsonify({'success': True})
 
 @app.route('/api/threads/<int:thread_id>/layouts', methods=['DELETE'])
@@ -462,7 +481,15 @@ def notify_discord(thread_id):
     }).encode('utf-8')
 
     notified = 0
+    class NoRedirects(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirects())
     for webhook_url in targets:
+        # Revalidate previously saved URLs as well as new settings.
+        if not valid_discord_webhook(webhook_url):
+            continue
         try:
             req = urllib.request.Request(
                 webhook_url,
@@ -473,13 +500,13 @@ def notify_discord(thread_id):
                 },
                 method='POST'
             )
-            urllib.request.urlopen(req)
+            with opener.open(req, timeout=5):
+                pass
             notified += 1
         except urllib.error.HTTPError as e:
-            body = e.read().decode('utf-8', errors='replace')
-            logger.error(f"Discord webhook HTTP error {e.code}: {body}")
+            logger.error('Discord webhook HTTP error %s', e.code)
         except Exception as e:
-            logger.error(f"Failed to send Discord notification: {e}")
+            logger.error('Discord notification failed (%s)', type(e).__name__)
 
     if notified == 0:
         return jsonify({'error': 'Failed to send Discord notification'}), 502
@@ -641,6 +668,18 @@ def get_config():
     return jsonify({
         'discord_configured': bool(os.environ.get('DISCORD_WEBHOOK_URL'))
     })
+
+@app.cli.command('claim-legacy-threads')
+@click.argument('username')
+def claim_legacy_threads(username):
+    """Assign unowned legacy threads to an existing USERNAME, explicitly."""
+    ensure_db_initialized()
+    user = database.get_user_by_username(username)
+    if not user:
+        raise click.ClickException('User not found')
+    database.claim_orphan_threads(user['id'])
+    click.echo('Unowned legacy threads assigned to ' + username)
+
 
 if __name__ == '__main__':
     # Development mode

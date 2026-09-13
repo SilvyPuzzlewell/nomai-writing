@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#1e1713">
     <title>Nomai Thread Viewer</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath d='M24 24 a2 2 0 0 1 4 0 a4 4 0 0 1 -8 0 a6 6 0 0 1 12 0 a8 8 0 0 1 -16 0 a10 10 0 0 1 20 0' fill='none' stroke='%2300d9ff' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/css/styles.css?v=30">
+    <link rel="stylesheet" href="/css/styles.css?v=31">
 </head>
 <body>
     <!-- Header: glyph, thread selector, primary action, overflow.
@@ -97,16 +97,26 @@
 
         <!-- Translation panel: sidebar on desktop, bottom sheet on mobile -->
         <aside id="translation-panel">
-            <div id="sheet-handle" aria-hidden="true"></div>
+            <button id="sheet-handle" type="button" aria-label="Expand translation panel" aria-expanded="false"></button>
             <div id="panel-header">
                 <div class="panel-header-row">
                     <h2>Translation</h2>
-                    <button id="delete-message-btn" class="btn btn-danger btn-small hidden" title="Delete this message">Delete</button>
+                    <button id="write-message-btn" class="btn btn-primary btn-small hidden">Write message</button>
                 </div>
                 <span id="writer-name"></span>
                 <div id="translation-progress" class="hidden"><div id="translation-progress-bar"></div></div>
                 <p id="peek-preview"></p>
+                <div id="reading-actions" class="hidden">
+                    <button id="translate-message-btn" class="btn btn-small">Translate</button>
+                    <button id="reply-message-btn" class="btn btn-small">Reply</button>
+                    <button id="delete-message-btn" class="btn btn-danger btn-small hidden">Delete</button>
+                </div>
             </div>
+            <details id="conversation-outline" class="hidden">
+                <summary id="outline-summary">Conversation <span id="thread-unread-count"></span></summary>
+                <div id="outline-list" aria-label="Revealed messages"></div>
+            </details>
+            <p id="thread-updates" role="status" aria-live="polite"></p>
             <div id="message-content"></div>
         </aside>
     </main>
@@ -170,6 +180,7 @@
             <h3 id="collision-modal-title">Spiral Overlap Detected</h3>
             <p>Your spiral settings would cause an overlap with an existing spiral. What would you like to do?</p>
             <div class="form-actions">
+                <button type="button" id="collision-cancel-btn" class="btn">Cancel</button>
                 <button type="button" id="collision-allow-btn" class="btn">Allow Overlap</button>
                 <button type="button" id="collision-adjust-btn" class="btn btn-primary">Auto-adjust</button>
             </div>
@@ -261,12 +272,13 @@
         </div>
     </div>
 
-    <script src="/js/api.js?v=30"></script>
-    <script src="/js/toast.js?v=30"></script>
-    <script src="/js/sheet.js?v=30"></script>
-    <script src="/js/spiral.js?v=30"></script>
-    <script src="/js/canvas.js?v=30"></script>
-    <script src="/js/interaction.js?v=30"></script>
-    <script src="/js/app.js?v=30"></script>
+    <script src="/js/api.js?v=31"></script>
+    <script src="/js/toast.js?v=31"></script>
+    <script src="/js/sheet.js?v=31"></script>
+    <script src="/js/spiral.js?v=31"></script>
+    <script src="/js/canvas.js?v=31"></script>
+    <script src="/js/interaction.js?v=31"></script>
+    <script src="/js/outline.js?v=31"></script>
+    <script src="/js/app.js?v=31"></script>
 </body>
 </html>

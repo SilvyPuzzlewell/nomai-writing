@@ -1416,3 +1416,106 @@ textarea:focus-visible {
         transform: none;
     }
 }
+
+
+/* Reading controls and the revealed conversation share the wall's palette. */
+#reading-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+#conversation-outline {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-color);
+    min-height: 0;
+}
+#outline-summary {
+    cursor: pointer;
+    padding: 12px 20px;
+    font-family: var(--font-heading);
+    font-size: 14px;
+}
+#thread-unread-count {
+    color: var(--curve-color);
+    font-size: 12px;
+    margin-left: 6px;
+}
+#outline-list {
+    max-height: min(30vh, 250px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 0 12px 12px;
+    touch-action: pan-y;
+}
+#outline-list ol { list-style: none; }
+#outline-list ol ol {
+    margin-left: 10px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border-strong);
+}
+.outline-message {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px;
+    margin-top: 3px;
+    text-align: left;
+    font: inherit;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+.outline-message.on-path { color: var(--text-color); }
+.outline-message[aria-current="true"] {
+    border-color: var(--curve-color);
+    background: rgba(0, 217, 255, 0.06);
+}
+.outline-message:focus-visible, #outline-summary:focus-visible {
+    outline: 2px solid var(--curve-color);
+    outline-offset: -2px;
+}
+.outline-writer { font-family: var(--font-heading); font-size: 14px; }
+.outline-writer::before {
+    content: '';
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 7px;
+    border-radius: 50%;
+    background: var(--curve-color);
+}
+.is-translated .outline-writer::before { background: var(--translated-color); }
+.outline-preview {
+    display: block;
+    font-size: 12px;
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#thread-updates {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 20px;
+    flex-shrink: 0;
+}
+#thread-updates:empty { display: none; }
+#message-content { min-height: 0; }
+#canvas-container[aria-busy="true"] { pointer-events: none; opacity: 0.65; }
+@media (max-width: 900px) {
+    #reading-actions .btn, #write-message-btn { min-height: 40px; }
+    #translation-panel.sheet-peek #conversation-outline,
+    #translation-panel.sheet-peek #reading-actions,
+    #translation-panel.sheet-peek #thread-updates { display: none; }
+    #outline-list { max-height: 20dvh; }
+}
+
+#sheet-handle {
+    width: 100%;
+    border: 0;
+    background: transparent;
+}
+#sheet-handle:focus-visible::before { background: var(--curve-color); }

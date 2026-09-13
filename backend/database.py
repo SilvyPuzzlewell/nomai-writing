@@ -1,5 +1,7 @@
 import sqlite3
 import os
+import json
+from validation import positive_id, validate_layout
 from contextlib import contextmanager
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -261,16 +263,18 @@ def get_all_threads(user_id):
         cursor = conn.execute('''
             SELECT t.id, t.title, t.created_at,
                    COUNT(m.id) as message_count,
+                   COUNT(m.id) - COUNT(mt.message_id) as unread_count,
                    CASE WHEN t.user_id = ? THEN 1 ELSE 0 END as is_owner
             FROM threads t
             LEFT JOIN messages m ON t.id = m.thread_id
+            LEFT JOIN message_translations mt ON mt.message_id = m.id AND mt.user_id = ?
             WHERE t.user_id = ?
                OR t.id IN (SELECT thread_id FROM thread_collaborators WHERE user_id = ?)
             GROUP BY t.id
             ORDER BY t.created_at DESC
-        ''', (user_id, user_id, user_id))
+        ''', (user_id, user_id, user_id, user_id))
         rows = cursor.fetchall()
-        cols = ['id', 'title', 'created_at', 'message_count', 'is_owner']
+        cols = ['id', 'title', 'created_at', 'message_count', 'unread_count', 'is_owner']
         if TURSO_DATABASE_URL:
             return rows_to_dicts(cols, rows)
         return [dict(row) for row in rows]
@@ -622,14 +626,24 @@ def create_message(thread_id, parent_id, writer_name, content, spiral_prefs=None
 
     spiral_prefs: optional dict with user spiral preferences (branchT, curvatureDir, curvatureTightness)
     """
-    import json
-
-    # Store spiral preferences as initial layout_data if provided
+    if not positive_id(thread_id) or (parent_id is not None and not positive_id(parent_id)):
+        raise ValueError('Invalid thread or parent ID')
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError('Message content is required')
+    if not isinstance(writer_name, str) or not writer_name.strip():
+        raise ValueError('Writer name is required')
     layout_data = None
-    if spiral_prefs:
-        layout_data = json.dumps({'userPrefs': spiral_prefs})
+    if spiral_prefs is not None:
+        layout_data = json.dumps(validate_layout({'userPrefs': spiral_prefs}))
 
     with get_connection() as conn:
+        if parent_id is not None:
+            parent = conn.execute(
+                'SELECT 1 FROM messages WHERE id = ? AND thread_id = ?',
+                (parent_id, thread_id)
+            ).fetchone()
+            if not parent:
+                raise ValueError('Parent message must belong to this thread')
         cursor = conn.execute('''
             INSERT INTO messages (thread_id, parent_id, writer_name, content, layout_data)
             VALUES (?, ?, ?, ?, ?)
@@ -676,8 +690,16 @@ def update_thread_layouts(thread_id, layouts):
     """Bulk update layout data for multiple messages in a thread.
     layouts: dict of {message_id: layout_data_json_string}
     """
+    if not isinstance(layouts, dict):
+        raise ValueError('layouts must be an object')
+    validated = {}
+    for message_id, layout_data in layouts.items():
+        if not str(message_id).isdigit() or not positive_id(int(message_id)):
+            raise ValueError('Invalid message ID')
+        layout = validate_layout(layout_data)
+        validated[message_id] = json.dumps(layout) if layout is not None else None
     with get_connection() as conn:
-        for message_id, layout_data in layouts.items():
+        for message_id, layout_data in validated.items():
             conn.execute(
                 'UPDATE messages SET layout_data = ? WHERE id = ? AND thread_id = ?',
                 (layout_data, message_id, thread_id)
@@ -701,55 +723,76 @@ def get_last_insert_id(conn, cursor):
     return cursor.lastrowid
 
 def import_thread(data, user_id):
-    """Import a thread with messages from JSON data.
+    """Validate the graph, then import it atomically in two passes.
 
-    data: dict with 'title' and optional 'messages' array
-    Each message should have: writer_name, content, parent_id (can reference old IDs), layout_data
+    Parent links use source IDs, never array order. Preserve those IDs as
+    geometry seeds for older exports that predate explicit layout seeds.
     """
-    import json
+    if not isinstance(data, dict) or not isinstance(data.get('title'), str) or not data['title'].strip():
+        raise ValueError('Thread title is required')
+    messages = data.get('messages', [])
+    if not isinstance(messages, list):
+        raise ValueError('messages must be an array')
+    by_id = {}
+    layouts = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            raise ValueError('Each message must be an object')
+        old_id = msg.get('id')
+        if old_id is not None:
+            if not positive_id(old_id) or old_id in by_id:
+                raise ValueError('Message IDs must be unique positive integers')
+            by_id[old_id] = msg
+        parent_id = msg.get('parent_id')
+        if parent_id is not None and not positive_id(parent_id):
+            raise ValueError('Invalid parent ID')
+        if not isinstance(msg.get('writer_name', 'Unknown'), str) or not isinstance(msg.get('content', ''), str):
+            raise ValueError('Writer and content must be text')
+        layout = validate_layout(msg.get('layout_data'))
+        if old_id is not None:
+            layout = layout or {}
+            layout.setdefault('seed', old_id)
+        layouts.append(json.dumps(layout) if layout is not None else None)
+
+    # Walk parent chains iteratively, rejecting missing parents and cycles.
+    complete = set()
+    for msg in messages:
+        path = set()
+        current = msg
+        while current is not None:
+            old_id = current.get('id')
+            if old_id in complete:
+                break
+            if old_id is not None:
+                if old_id in path:
+                    raise ValueError('Message parents contain a cycle')
+                path.add(old_id)
+            parent_id = current.get('parent_id')
+            if parent_id is not None and parent_id not in by_id:
+                raise ValueError('Parent message is missing from the import')
+            current = by_id.get(parent_id)
+        complete.update(path)
 
     with get_connection() as conn:
-        # Create the thread
         cursor = conn.execute(
             'INSERT INTO threads (title, user_id) VALUES (?, ?)',
             (data['title'], user_id)
         )
         thread_id = get_last_insert_id(conn, cursor)
+        old_to_new_id = {}
+        inserted = []
+        for msg, layout in zip(messages, layouts):
+            cursor = conn.execute(
+                'INSERT INTO messages (thread_id, parent_id, writer_name, content, layout_data) VALUES (?, NULL, ?, ?, ?)',
+                (thread_id, msg.get('writer_name', 'Unknown'), msg.get('content', ''), layout)
+            )
+            new_id = get_last_insert_id(conn, cursor)
+            inserted.append((new_id, msg.get('parent_id')))
+            if msg.get('id') is not None:
+                old_to_new_id[msg['id']] = new_id
+        for new_id, old_parent in inserted:
+            if old_parent is not None:
+                conn.execute('UPDATE messages SET parent_id = ? WHERE id = ?',
+                             (old_to_new_id[old_parent], new_id))
 
-        # Import messages if provided
-        messages = data.get('messages', [])
-        if messages:
-            # Build a map from old IDs to new IDs
-            old_to_new_id = {}
-
-            # Sort messages so parents come before children
-            # Messages with null parent_id first, then by original order
-            sorted_messages = sorted(messages, key=lambda m: (m.get('parent_id') is not None, messages.index(m)))
-
-            for msg in sorted_messages:
-                old_id = msg.get('id')
-                old_parent_id = msg.get('parent_id')
-
-                # Map old parent_id to new parent_id
-                new_parent_id = None
-                if old_parent_id is not None:
-                    new_parent_id = old_to_new_id.get(old_parent_id)
-
-                # Insert the message
-                cursor = conn.execute('''
-                    INSERT INTO messages (thread_id, parent_id, writer_name, content, layout_data)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (
-                    thread_id,
-                    new_parent_id,
-                    msg.get('writer_name', 'Unknown'),
-                    msg.get('content', ''),
-                    msg.get('layout_data')
-                ))
-
-                # Map old ID to new ID
-                if old_id is not None:
-                    old_to_new_id[old_id] = get_last_insert_id(conn, cursor)
-
-    # Return the created thread with messages (after commit)
     return get_thread_with_messages(thread_id)
